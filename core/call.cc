@@ -47,6 +47,8 @@ void Calls::status(const Message &message)
         return;
 
     modem_.log("call %u status %u, end cause %u", s->id, s->status, s->end_cause);
+    if (s->status == IPC_CALL_STATUS_RELEASED)
+        lastEndCause_ = s->end_cause;
     if (s->status == IPC_CALL_STATUS_CONNECTED || s->status == IPC_CALL_STATUS_DIALING)
         setAudio(true);
     refresh();

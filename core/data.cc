@@ -99,6 +99,7 @@ void Data::connect(unsigned int cid, const DataProfile &profile, Done done)
         return;
     }
 
+    failCauses_.erase(cid);
     pending_[cid] = std::move(done);
     calls_[cid] = DataCall{};
     calls_[cid].cid = cid;
@@ -235,6 +236,7 @@ void Data::callStatus(const Message &message)
     DataCall call = it->second;
     call.active = false;
     call.failCause = status.fail_cause;
+    failCauses_[call.cid] = status.fail_cause;
     if (!call.iface.empty() && links_.down)
         links_.down(call.cid, call.iface);
     calls_.erase(it);

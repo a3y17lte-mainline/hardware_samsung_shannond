@@ -26,8 +26,9 @@ public:
 
     void onIncoming(Incoming callback) { incoming_.push_back(std::move(callback)); }
 
-    // tpdu without SMSC; the SMSC from the SIM is put in front
-    void send(const Bytes &tpdu, Sent done);
+    // tpdu without SMSC; the SMSC from the SIM is put in front unless smsc
+    // (an address as in the PDU: type of number, BCD digits) is given
+    void send(const Bytes &tpdu, Sent done, const Bytes *smsc = nullptr);
 
 private:
     void deviceReady();

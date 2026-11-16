@@ -70,6 +70,13 @@ public:
     void disconnect(unsigned int cid, std::function<void(bool)> done = {});
 
     const std::map<unsigned int, DataCall> &calls() const { return calls_; }
+    // The network's cause (3GPP TS 24.301 ESM cause) when the context last
+    // failed or went down, 0 if none
+    uint8_t lastFailCause(unsigned int cid) const
+    {
+        auto it = failCauses_.find(cid);
+        return it == failCauses_.end() ? 0 : it->second;
+    }
     void onChanged(std::function<void(const DataCall &)> cb) { changed_.push_back(std::move(cb)); }
 
 private:
@@ -83,6 +90,7 @@ private:
     DataLinks links_;
     std::map<unsigned int, DataCall> calls_;
     std::map<unsigned int, Done> pending_;
+    std::map<unsigned int, uint8_t> failCauses_;
     std::vector<std::function<void(const DataCall &)>> changed_;
 };
 

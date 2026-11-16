@@ -2,6 +2,7 @@
 #include "core/network.h"
 
 #include <cstdlib>
+#include <cstring>
 
 extern "C" {
 #include <samsung-ipc.h>
@@ -99,6 +100,11 @@ Network::Network(Modem &modem) : modem_(modem)
             notify();
         }
     });
+    modem_.onMessage(IPC_MISC_ME_VERSION, [this](const Message &m) {
+        if (auto v = m.as<ipc_misc_me_version_response_data>())
+            version_.assign(v->software_version,
+                            strnlen(v->software_version, sizeof(v->software_version)));
+    });
     modem_.onMessage(IPC_MISC_ME_SN, [this](const Message &m) {
         auto r = m.as<ipc_misc_me_sn_response_data>();
         if (r && r->type == IPC_MISC_ME_SN_SERIAL_NUM) {
@@ -127,6 +133,10 @@ void Network::powerUp()
     ipc_misc_me_sn_request_data sn{};
     sn.type = IPC_MISC_ME_SN_SERIAL_NUM;
     modem_.request(IPC_MISC_ME_SN, IPC_TYPE_GET, sn);
+
+    ipc_misc_me_version_request_data version;
+    ipc_misc_me_version_setup(&version);
+    modem_.request(IPC_MISC_ME_VERSION, IPC_TYPE_GET, version);
 
     // The modem starts with circuit switched service only; data needs PS too
     ipc_net_service_domain_config_data domain;
@@ -190,6 +200,18 @@ void Network::setRadioPower(bool on, std::function<void(bool)> done)
         modem_.request(IPC_PWR_PHONE_PWR_UP, IPC_TYPE_EXEC, {}, [send](const Result &) { send(); });
     else
         send();
+}
+
+void Network::setModes(uint8_t modes, std::function<void(bool)> done)
+{
+    ipc_net_mode_sel_data data{};
+    data.mode_sel = modes;
+    modem_.request(IPC_NET_MODE_SEL, IPC_TYPE_SET, data, [this, modes, done](const Result &r) {
+        if (r.ok)
+            modes_ = modes;
+        if (done)
+            done(r.ok);
+    });
 }
 
 void Network::probeModes(std::function<void(uint8_t)> done)

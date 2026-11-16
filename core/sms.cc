@@ -52,8 +52,9 @@ void Sms::received(const Message &message)
         callback(pdu);
 }
 
-void Sms::send(const Bytes &tpdu, Sent done)
+void Sms::send(const Bytes &tpdu, Sent done, const Bytes *smscOverride)
 {
+    const Bytes &smsc_ = smscOverride && !smscOverride->empty() ? *smscOverride : this->smsc_;
     if (tpdu.empty() || 1 + smsc_.size() + tpdu.size() > 0xff) {
         done(false, 0);
         return;

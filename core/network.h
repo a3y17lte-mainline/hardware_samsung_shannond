@@ -41,7 +41,8 @@ public:
     const Registration &voice() const { return voice_; }   // circuit switched
     const Registration &data() const { return data_; }     // packet switched
     const std::string &operatorCode() const { return plmn_; }  // MCC MNC
-    int signal() const { return rssi_; }  // raw IPC_DISP_RSSI_INFO
+    int signal() const { return rssi_; }  // raw IPC_DISP_RSSI_INFO: -dBm, -1 if unknown
+    const std::string &version() const { return version_; }  // modem software
     bool radioOn() const { return radioOn_; }
     uint8_t modes() const { return modes_; }
 
@@ -51,6 +52,7 @@ public:
     void setRadioPower(bool on, std::function<void(bool ok)> done = {});
     // Asks for the modes in order and keeps the ones the modem accepts
     void probeModes(std::function<void(uint8_t modes)> done = {});
+    void setModes(uint8_t modes, std::function<void(bool ok)> done = {});
     void refresh();
 
 private:
@@ -63,6 +65,7 @@ private:
     bool ready_ = false;
     bool radioOn_ = false;
     std::string imei_;
+    std::string version_;
     Registration voice_;
     Registration data_;
     std::string plmn_;

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // The request tracker against a raw peer on a socket pair.
+#include <atomic>
 #include <sys/socket.h>
+#include <thread>
 #include <unistd.h>
 
 #include "core/modem.h"
@@ -185,4 +187,13 @@ TEST(hang_up_fails_pending_requests)
     pair.fd[1] = -1;
     CHECK(loop.runUntil([&] { return closed; }));
     CHECK(result && !result->ok && !result->timeout);
+}
+
+TEST(post_runs_on_the_loop_from_another_thread)
+{
+    EventLoop loop;
+    std::atomic<int> value{0};
+    std::thread other([&] { loop.post([&] { value = 42; }); });
+    other.join();
+    CHECK(loop.runUntil([&] { return value == 42; }));
 }

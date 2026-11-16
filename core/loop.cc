@@ -3,16 +3,47 @@
 
 #include <cerrno>
 #include <sys/epoll.h>
+#include <sys/eventfd.h>
 #include <unistd.h>
 
 namespace modemd {
 
-EventLoop::EventLoop() : epfd_(epoll_create1(EPOLL_CLOEXEC)) {}
+EventLoop::EventLoop()
+    : epfd_(epoll_create1(EPOLL_CLOEXEC)), wakeFd_(eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK))
+{
+    watch(wakeFd_, EPOLLIN, [this](uint32_t) { runPosted(); });
+}
 
 EventLoop::~EventLoop()
 {
+    if (wakeFd_ >= 0)
+        close(wakeFd_);
     if (epfd_ >= 0)
         close(epfd_);
+}
+
+void EventLoop::post(std::function<void()> callback)
+{
+    {
+        std::lock_guard<std::mutex> lock(postedLock_);
+        posted_.push_back(std::move(callback));
+    }
+    const uint64_t one = 1;
+    (void)!write(wakeFd_, &one, sizeof(one));
+}
+
+void EventLoop::runPosted()
+{
+    uint64_t count;
+    (void)!read(wakeFd_, &count, sizeof(count));
+
+    std::vector<std::function<void()>> callbacks;
+    {
+        std::lock_guard<std::mutex> lock(postedLock_);
+        callbacks.swap(posted_);
+    }
+    for (auto &callback : callbacks)
+        callback();
 }
 
 bool EventLoop::watch(int fd, uint32_t events, FdHandler handler)

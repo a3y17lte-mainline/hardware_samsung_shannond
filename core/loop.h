@@ -9,6 +9,8 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <vector>
 #include <unordered_map>
 
 namespace modemd {
@@ -29,6 +31,8 @@ public:
     void unwatch(int fd);
 
     TimerId after(std::chrono::milliseconds delay, std::function<void()> callback);
+    // From any thread: run callback on the loop's thread
+    void post(std::function<void()> callback);
     void cancel(TimerId id);
 
     // Wait at most timeout for one round of events and due timers
@@ -47,8 +51,12 @@ private:
     };
 
     void runTimers();
+    void runPosted();
 
     int epfd_;
+    int wakeFd_;
+    std::mutex postedLock_;
+    std::vector<std::function<void()>> posted_;
     bool running_ = false;
     TimerId nextTimer_ = 1;
     std::unordered_map<int, std::shared_ptr<FdHandler>> handlers_;
