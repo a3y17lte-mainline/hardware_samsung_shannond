@@ -4,6 +4,7 @@
 #include <atomic>
 #include <sys/socket.h>
 #include <thread>
+#include <poll.h>
 #include <unistd.h>
 
 #include "core/modem.h"
@@ -34,6 +35,13 @@ struct Pair {
         if (n <= 0)
             return std::nullopt;
         return decodeFmt({buffer, static_cast<size_t>(n)});
+    }
+
+    // Whether a message is waiting, without blocking on an empty socket
+    bool waiting()
+    {
+        pollfd p{fd[1], POLLIN, 0};
+        return poll(&p, 1, 20) > 0;
     }
 
     void send(const Message &m)
@@ -128,9 +136,10 @@ TEST(answers_are_matched_by_sequence_not_order)
     Pair pair;
     Modem modem(loop, pair.fd[0], -1);
 
+    // Different groups are with the modem together
     std::vector<int> order;
     modem.request(IPC_NET_MODE_SEL, IPC_TYPE_SET, Bytes{1}, [&](const Result &) { order.push_back(1); });
-    modem.request(IPC_NET_MODE_SEL, IPC_TYPE_SET, Bytes{2}, [&](const Result &) { order.push_back(2); });
+    modem.request(IPC_SND_MIC_MUTE_CTRL, IPC_TYPE_SET, Bytes{2}, [&](const Result &) { order.push_back(2); });
     auto first = pair.receive();
     auto second = pair.receive();
     CHECK(first && second && first->mseq != second->mseq);
@@ -139,6 +148,36 @@ TEST(answers_are_matched_by_sequence_not_order)
     pair.send(genRes(*first, IPC_GEN_PHONE_RES_CODE_SUCCESS));
     CHECK(loop.runUntil([&] { return order.size() == 2; }));
     CHECK(order[0] == 2 && order[1] == 1);
+}
+
+TEST(one_request_per_group_at_a_time)
+{
+    EventLoop loop;
+    Pair pair;
+    Modem modem(loop, pair.fd[0], -1);
+
+    std::vector<Bytes> answers;
+    for (uint8_t i = 1; i <= 3; i++)
+        modem.request(IPC_SEC_RSIM_ACCESS, IPC_TYPE_GET, Bytes{i}, [&](const Result &r) {
+            answers.push_back(r.ok ? r.response->data : Bytes{});
+        });
+
+    // The second request leaves only when the first is answered; answers
+    // without a sequence number go to the request that is out
+    for (uint8_t i = 1; i <= 3; i++) {
+        auto request = pair.receive();
+        CHECK(request && request->data == Bytes{i});
+        CHECK(!pair.waiting());
+
+        Message response;
+        response.command = IPC_SEC_RSIM_ACCESS;
+        response.type = IPC_TYPE_RESP;
+        response.aseq = i == 2 ? 0 : request->mseq;
+        response.data = {static_cast<uint8_t>(0x10 + i)};
+        pair.send(response);
+        CHECK(loop.runUntil([&] { return answers.size() == i; }));
+    }
+    CHECK(answers == (std::vector<Bytes>{{0x11}, {0x12}, {0x13}}));
 }
 
 TEST(unanswered_request_times_out)

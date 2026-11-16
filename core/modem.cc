@@ -79,27 +79,43 @@ uint8_t Modem::nextSeq()
 void Modem::request(uint16_t command, uint8_t type, Bytes data,
                     Callback callback, std::chrono::milliseconds timeout)
 {
-    Message message;
-    message.command = command;
-    message.type = type;
-    message.mseq = nextSeq();
-    message.data = std::move(data);
+    Queued request{command, type, std::move(data), std::move(callback), timeout};
 
-    const Bytes frame = encodeFmt(message);
-    if (isClosed_ || write(fmtFd_, frame.data(), frame.size()) != static_cast<ssize_t>(frame.size())) {
+    if (isClosed_) {
         log("send %s failed", commandName(command));
-        if (callback)
-            callback(Result{});
+        if (request.callback)
+            request.callback(Result{});
         return;
     }
+    if (busy_.count(command >> 8)) {
+        queued_[command >> 8].push_back(std::move(request));
+        return;
+    }
+    send(std::move(request));
+}
 
+void Modem::send(Queued request)
+{
+    Message message;
+    message.command = request.command;
+    message.type = request.type;
+    message.mseq = nextSeq();
+    message.data = std::move(request.data);
+
+    const Bytes frame = encodeFmt(message);
     const uint8_t mseq = message.mseq;
-    auto timer = loop_.after(timeout, [this, mseq] {
+    const bool sent = write(fmtFd_, frame.data(), frame.size()) == static_cast<ssize_t>(frame.size());
+    if (!sent)
+        log("send %s failed", commandName(request.command));
+
+    // A failed send ends like any other request, so the next one goes out
+    auto timer = loop_.after(sent ? request.timeout : std::chrono::milliseconds(0), [this, mseq, sent] {
         Result result;
-        result.timeout = true;
+        result.timeout = sent;
         finish(mseq, result);
     });
-    pending_[mseq] = Pending{command, type, std::move(callback), timer};
+    busy_[request.command >> 8] = mseq;
+    pending_[mseq] = Pending{request.command, request.type, std::move(request.callback), timer};
 }
 
 void Modem::onMessage(uint16_t command, Listener listener)
@@ -131,15 +147,39 @@ void Modem::finish(uint8_t mseq, const Result &result)
 
     if (result.timeout)
         log("%s: no answer", commandName(pending.command));
+
+    // The group's next request goes out before the callback can add more
+    const uint8_t group = pending.command >> 8;
+    busy_.erase(group);
+    auto waiting = queued_.find(group);
+    if (waiting != queued_.end() && !isClosed_) {
+        Queued next = std::move(waiting->second.front());
+        waiting->second.pop_front();
+        if (waiting->second.empty())
+            queued_.erase(waiting);
+        send(std::move(next));
+    }
     if (pending.callback)
         pending.callback(result);
 }
 
 void Modem::handle(const Message &message)
 {
-    // Answers to our requests
-    if (message.aseq) {
+    // Answers to our requests. Some come without the request's sequence
+    // number: those belong to the one request their group has out
+    const bool answer = message.type == IPC_TYPE_RESP || message.command == IPC_GEN_PHONE_RES;
+    if (message.aseq || answer) {
         auto it = pending_.find(message.aseq);
+        if (it == pending_.end() && answer) {
+            auto res = message.as<ipc_gen_phone_res_data>();
+            const uint8_t group = message.command == IPC_GEN_PHONE_RES
+                                          ? (res ? res->group : 0)
+                                          : message.command >> 8;
+            auto out = busy_.find(group);
+            if (out != busy_.end())
+                it = pending_.find(out->second);
+        }
+        const uint8_t mseq = it != pending_.end() ? it->first : 0;
         if (it != pending_.end()) {
             const Pending &pending = it->second;
 
@@ -149,7 +189,7 @@ void Modem::handle(const Message &message)
                     Result result;
                     result.code = res->code;
                     result.ok = res->code == IPC_GEN_PHONE_RES_CODE_SUCCESS;
-                    finish(message.aseq, result);
+                    finish(mseq, result);
                     return;
                 }
             } else if (message.command == pending.command &&
@@ -161,7 +201,7 @@ void Modem::handle(const Message &message)
                 auto range = listeners_.equal_range(message.command);
                 for (auto l = range.first; l != range.second; ++l)
                     l->second(message);
-                finish(message.aseq, result);
+                finish(mseq, result);
                 return;
             }
         }
@@ -249,6 +289,13 @@ void Modem::closed()
     // Fail everything still waiting
     while (!pending_.empty())
         finish(pending_.begin()->first, Result{});
+    while (!queued_.empty()) {
+        auto queue = std::move(queued_.begin()->second);
+        queued_.erase(queued_.begin());
+        for (Queued &request : queue)
+            if (request.callback)
+                request.callback(Result{});
+    }
 
     if (onClosed_)
         onClosed_();

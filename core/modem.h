@@ -10,6 +10,7 @@
 
 #include <chrono>
 #include <cstdarg>
+#include <deque>
 #include <functional>
 #include <map>
 #include <string>
@@ -80,6 +81,15 @@ private:
     void readRfs();
     void handleRfs(const RfsMessage &message);
     void handle(const Message &message);
+    struct Queued {
+        uint16_t command;
+        uint8_t type;
+        Bytes data;
+        Callback callback;
+        std::chrono::milliseconds timeout;
+    };
+
+    void send(Queued request);
     void finish(uint8_t mseq, const Result &result);
     uint8_t nextSeq();
     void closed();
@@ -92,6 +102,12 @@ private:
     FrameAssembler rfsAssembler_{kRfsHeaderSize, 4, 0x80000};
     uint8_t seq_ = 0;
     std::map<uint8_t, Pending> pending_;
+    // One request per message group is with the modem at a time, as the
+    // stock RIL works: the modem drops some of a burst, and not every answer
+    // carries its request's sequence number. Group -> the sequence number
+    // out, and the requests waiting behind it
+    std::map<uint8_t, uint8_t> busy_;
+    std::map<uint8_t, std::deque<Queued>> queued_;
     std::multimap<uint16_t, Listener> listeners_;
     std::map<uint8_t, RfsHandler> rfsHandlers_;
     std::function<void()> onClosed_;
