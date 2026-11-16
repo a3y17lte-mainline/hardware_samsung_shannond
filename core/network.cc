@@ -98,9 +98,34 @@ Network::Network(Modem &modem) : modem_(modem)
             std::string plmn(s->plmn, sizeof(s->plmn));
             while (!plmn.empty() && (plmn.back() == '#' || plmn.back() == '\0'))
                 plmn.pop_back();
+            if (plmn != plmn_) {
+                longName_.clear();
+                shortName_.clear();
+            }
             plmn_ = plmn;
             notify();
         }
+    });
+    // The network's own name for itself (NITZ): a full and a short name,
+    // each as a flag, a length, a coding and 32 bytes of text
+    modem_.onMessage(IPC_NET_IDENTITY, [this](const Message &m) {
+        auto name = [&m](size_t at) -> std::string {
+            if (m.data.size() < at + 35 || !m.data[at] || m.data[at + 1] > 32)
+                return {};
+            std::string text(m.data.begin() + at + 3, m.data.begin() + at + 3 + m.data[at + 1]);
+            // Only plain text; other alphabets are left to the framework
+            for (unsigned char c : text)
+                if (c < 0x20 || c > 0x7e)
+                    return {};
+            return text;
+        };
+        const std::string full = name(2);
+        const std::string brief = name(37);
+        if (full.empty() && brief.empty())
+            return;
+        longName_ = full.empty() ? brief : full;
+        shortName_ = brief.empty() ? full : brief;
+        notify();
     });
     modem_.onMessage(IPC_DISP_RSSI_INFO, [this](const Message &m) {
         if (auto r = m.as<ipc_disp_rssi_info_data>()) {

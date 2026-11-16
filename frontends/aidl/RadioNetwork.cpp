@@ -402,7 +402,11 @@ RadioNetwork::RadioNetwork(std::shared_ptr<Stack> stack) : stack_(std::move(stac
         const bool reg = registered(core->network.voice().state) ||
                          registered(core->network.data().state);
         const std::string plmn = reg ? core->network.operatorCode() : std::string();
-        r->getOperatorResponse(ok(serial), plmn, plmn, plmn);
+        // Without a name from the network the framework gets the code
+        const std::string &full = core->network.operatorLongName();
+        const std::string &brief = core->network.operatorShortName();
+        r->getOperatorResponse(ok(serial), reg && !full.empty() ? full : plmn,
+                               reg && !brief.empty() ? brief : plmn, plmn);
     });
     return ::ndk::ScopedAStatus::ok();
 }

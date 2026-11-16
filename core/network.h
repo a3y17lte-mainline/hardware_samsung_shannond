@@ -41,6 +41,9 @@ public:
     const Registration &voice() const { return voice_; }   // circuit switched
     const Registration &data() const { return data_; }     // packet switched
     const std::string &operatorCode() const { return plmn_; }  // MCC MNC
+    // The names the network sent for itself, empty if it sent none
+    const std::string &operatorLongName() const { return longName_; }
+    const std::string &operatorShortName() const { return shortName_; }
     int signal() const { return rssi_; }  // raw IPC_DISP_RSSI_INFO: -dBm, -1 if unknown
     const std::string &version() const { return version_; }  // modem software
     bool radioOn() const { return radioOn_; }
@@ -69,6 +72,8 @@ private:
     Registration voice_;
     Registration data_;
     std::string plmn_;
+    std::string longName_;
+    std::string shortName_;
     int rssi_ = -1;
     uint8_t modes_ = 0;
     std::vector<std::function<void()>> changed_;

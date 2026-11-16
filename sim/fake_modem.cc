@@ -255,6 +255,17 @@ void FakeModem::handle(const Message &r)
         ipc_net_serving_network_data s{};
         std::memcpy(s.plmn, kPlmn, sizeof(s.plmn));
         respond(r, toBytes(s));
+
+        // The network's names follow, as the phone's modem sends them
+        Bytes identity(103, 0);
+        identity[1] = 0xff;
+        for (size_t at : {size_t{2}, size_t{37}}) {
+            identity[at] = 1;
+            identity[at + 1] = 5;
+            identity[at + 2] = 1;
+            std::memcpy(&identity[at + 3], "O2.CZ", 5);
+        }
+        send(IPC_NET_IDENTITY, IPC_TYPE_NOTI, identity);
         return;
     }
     case IPC_NET_MODE_SEL: {
