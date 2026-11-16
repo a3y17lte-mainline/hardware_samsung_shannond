@@ -51,7 +51,9 @@ add_executable(modemd_tests
     tests/test_frame.cc
     tests/test_modem.cc
     tests/test_nv.cc
-    tests/test_flow.cc)
+    tests/test_flow.cc
+    tests/test_codec.cc
+    frontends/aidl/Codec.cpp)
 target_link_libraries(modemd_tests PRIVATE modemd_core)
 target_compile_options(modemd_tests PRIVATE -Wall -Wextra)
 

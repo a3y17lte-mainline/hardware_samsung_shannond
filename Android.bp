@@ -1,0 +1,76 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// modemd in an Android tree: the daemon core and the radio HAL. Expects
+// libsamsung-ipc (a3y17lte branch) in the tree as well, for
+// libsamsung-ipc-shannon. Both stay in the root namespace.
+
+cc_defaults {
+    name: "modemd_defaults",
+    vendor: true,
+    cpp_std: "c++20",
+    cflags: [
+        "-Wall",
+        "-Wextra",
+        "-Werror=return-type",
+    ],
+}
+
+cc_library_static {
+    name: "libmodemd-core",
+    defaults: ["modemd_defaults"],
+    srcs: [
+        "core/call.cc",
+        "core/data.cc",
+        "core/frame.cc",
+        "core/loop.cc",
+        "core/modem.cc",
+        "core/netlink.cc",
+        "core/network.cc",
+        "core/nv.cc",
+        "core/ports.cc",
+        "core/sim.cc",
+        "core/sms.cc",
+    ],
+    export_include_dirs: ["."],
+    static_libs: ["libsamsung-ipc-shannon"],
+    export_static_lib_headers: ["libsamsung-ipc-shannon"],
+    shared_libs: ["libcrypto"],
+}
+
+cc_binary {
+    name: "android.hardware.radio-service.a3y17lte",
+    defaults: ["modemd_defaults"],
+    relative_install_path: "hw",
+    init_rc: ["frontends/aidl/android.hardware.radio-service.a3y17lte.rc"],
+    vintf_fragments: ["frontends/aidl/android.hardware.radio-service.a3y17lte.xml"],
+    srcs: [
+        "frontends/aidl/Codec.cpp",
+        "frontends/aidl/RadioConfig.cpp",
+        "frontends/aidl/RadioData.cpp",
+        "frontends/aidl/RadioMessaging.cpp",
+        "frontends/aidl/RadioModem.cpp",
+        "frontends/aidl/RadioNetwork.cpp",
+        "frontends/aidl/RadioSim.cpp",
+        "frontends/aidl/RadioVoice.cpp",
+        "frontends/aidl/Stack.cpp",
+        "frontends/aidl/service.cpp",
+    ],
+    static_libs: [
+        "android.hardware.radio-V5-ndk",
+        "android.hardware.radio.config-V5-ndk",
+        "android.hardware.radio.data-V5-ndk",
+        "android.hardware.radio.messaging-V5-ndk",
+        "android.hardware.radio.modem-V5-ndk",
+        "android.hardware.radio.network-V5-ndk",
+        "android.hardware.radio.sim-V5-ndk",
+        "android.hardware.radio.voice-V5-ndk",
+        "libmodemd-core",
+        "libsamsung-ipc-shannon",
+    ],
+    shared_libs: [
+        "libbase",
+        "libbinder_ndk",
+        "libcrypto",
+        "liblog",
+    ],
+}

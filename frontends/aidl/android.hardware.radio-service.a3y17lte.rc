@@ -1,0 +1,9 @@
+# The radio HAL. Opening the IPC port starts the modem (the kernel loads its
+# firmware and NV data); a modem crash closes the port, the service exits and
+# init restarts it, which starts the modem again.
+service vendor.radio-a3y17lte /vendor/bin/hw/android.hardware.radio-service.a3y17lte
+    class hal
+    user radio
+    group radio inet misc
+    capabilities NET_ADMIN NET_RAW
+    task_profiles HighPerformance
