@@ -50,7 +50,9 @@ struct DataCall {
 
 // How a context's interface is provided: by default a WWAN link
 struct DataLinks {
-    std::function<bool(unsigned int cid, std::string &iface)> up;
+    // Creates the interface, names it in call.iface and gives it the
+    // call's addresses: nothing else on the system does that
+    std::function<bool(DataCall &call)> up;
     std::function<void(unsigned int cid, const std::string &iface)> down;
 
     static DataLinks wwan(const std::string &wwanDevice);

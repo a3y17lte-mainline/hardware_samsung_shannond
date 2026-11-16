@@ -4,6 +4,7 @@
 #pragma once
 
 #include <optional>
+#include <cstdint>
 #include <string>
 
 namespace shannond {
@@ -29,6 +30,9 @@ bool createWwanLink(const std::string &wwanDevice, const std::string &name, unsi
                     std::string *error = nullptr);
 bool deleteLink(const std::string &name, std::string *error = nullptr);
 bool setLinkUp(const std::string &name, bool up, std::string *error = nullptr);
+// Sets an address on a link: 4 bytes for AF_INET, 16 for AF_INET6
+bool addAddress(const std::string &name, int family, const uint8_t *address,
+                unsigned int prefixLength, std::string *error = nullptr);
 bool linkExists(const std::string &name);
 
 }  // namespace shannond

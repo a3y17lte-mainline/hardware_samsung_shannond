@@ -6,6 +6,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <linux/if_addr.h>
 #include <linux/if_link.h>
 #include <linux/netlink.h>
 #include <linux/rtnetlink.h>
@@ -20,18 +21,18 @@ namespace {
 
 class Request {
 public:
-    Request(uint16_t type, uint16_t flags)
+    Request(uint16_t type, uint16_t flags, size_t bodySize = sizeof(ifinfomsg))
     {
         std::memset(buffer_, 0, sizeof(buffer_));
-        header()->nlmsg_len = NLMSG_LENGTH(sizeof(ifinfomsg));
+        header()->nlmsg_len = NLMSG_LENGTH(bodySize);
         header()->nlmsg_type = type;
         header()->nlmsg_flags = NLM_F_REQUEST | NLM_F_ACK | flags;
         header()->nlmsg_seq = 1;
-        info()->ifi_family = AF_UNSPEC;
     }
 
     nlmsghdr *header() { return reinterpret_cast<nlmsghdr *>(buffer_); }
     ifinfomsg *info() { return static_cast<ifinfomsg *>(NLMSG_DATA(header())); }
+    ifaddrmsg *address() { return static_cast<ifaddrmsg *>(NLMSG_DATA(header())); }
 
     rtattr *add(uint16_t type, const void *data, size_t length)
     {
@@ -123,6 +124,27 @@ bool setLinkUp(const std::string &name, bool up, std::string *error)
     request.info()->ifi_change = IFF_UP;
     request.info()->ifi_flags = up ? IFF_UP : 0;
     request.add(IFLA_IFNAME, name.c_str(), name.size() + 1);
+    return request.send(error);
+}
+
+bool addAddress(const std::string &name, int family, const uint8_t *address,
+                unsigned int prefixLength, std::string *error)
+{
+    const unsigned int index = if_nametoindex(name.c_str());
+    if (!index) {
+        if (error)
+            *error = std::strerror(ENODEV);
+        return false;
+    }
+
+    Request request(RTM_NEWADDR, NLM_F_CREATE | NLM_F_REPLACE, sizeof(ifaddrmsg));
+    request.address()->ifa_family = static_cast<uint8_t>(family);
+    request.address()->ifa_prefixlen = static_cast<uint8_t>(prefixLength);
+    request.address()->ifa_scope = family == AF_INET6 ? RT_SCOPE_LINK : RT_SCOPE_UNIVERSE;
+    request.address()->ifa_index = index;
+    const size_t size = family == AF_INET6 ? 16 : 4;
+    request.add(IFA_LOCAL, address, size);
+    request.add(IFA_ADDRESS, address, size);
     return request.send(error);
 }
 

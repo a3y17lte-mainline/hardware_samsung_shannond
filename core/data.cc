@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "core/data.h"
 
+#include <algorithm>
+#include <array>
 #include <cstring>
+#include <sys/socket.h>
 
 #include "core/ports.h"
 
@@ -42,22 +45,37 @@ std::array<uint8_t, N> arr(const unsigned char *p)
 DataLinks DataLinks::wwan(const std::string &wwanDevice)
 {
     DataLinks links;
-    links.up = [wwanDevice](unsigned int cid, std::string &iface) {
-        iface = ifaceName(cid);
-        std::string error;
-        if (!linkExists(iface) && !createWwanLink(wwanDevice, iface, cid - 1, &error))
+    links.up = [wwanDevice](DataCall &call) {
+        const std::string iface = ifaceName(call.cid);
+        call.iface = iface;
+        // A link left from an earlier call still has that call's addresses
+        if (linkExists(iface))
+            deleteLink(iface);
+        if (!createWwanLink(wwanDevice, iface, call.cid - 1))
             return false;
-        return setLinkUp(iface, true, &error);
+
+        // A point to point link: the address alone, no subnet
+        if (call.ipv4 && !addAddress(iface, AF_INET, call.ipv4->data(), 32))
+            return false;
+        if (call.ipv6InterfaceId) {
+            // The link local address the network expects; the prefix comes
+            // by router advertisement
+            std::array<uint8_t, 16> ll{0xfe, 0x80};
+            std::copy(call.ipv6InterfaceId->begin(), call.ipv6InterfaceId->end(), ll.begin() + 8);
+            if (!addAddress(iface, AF_INET6, ll.data(), 64))
+                return false;
+        }
+        return setLinkUp(iface, true);
     };
-    links.down = [](unsigned int, const std::string &iface) { setLinkUp(iface, false); };
+    links.down = [](unsigned int, const std::string &iface) { deleteLink(iface); };
     return links;
 }
 
 DataLinks DataLinks::none()
 {
     DataLinks links;
-    links.up = [](unsigned int cid, std::string &iface) {
-        iface = ifaceName(cid);
+    links.up = [](DataCall &call) {
+        call.iface = ifaceName(call.cid);
         return true;
     };
     links.down = [](unsigned int, const std::string &) {};
@@ -203,7 +221,7 @@ void Data::ipConfiguration(const Message &message)
         return;
     }
 
-    if (!links_.up || !links_.up(cid, call.iface)) {
+    if (!links_.up || !links_.up(call)) {
         modem_.log("data call %u: no network interface", cid);
         complete(cid, false);
         return;
