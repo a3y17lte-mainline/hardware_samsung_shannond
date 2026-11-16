@@ -140,11 +140,15 @@ def generate(api, version, out):
             "        return ::ndk::ScopedAStatus::ok();",
             "    }",
             "",
-            "    ::ndk::ScopedAStatus responseAcknowledgement() override {",
-            "        return ::ndk::ScopedAStatus::ok();",
-            "    }",
-            "",
         ]
+        # Not every interface has it (IRadioConfig does not)
+        if any(method == "responseAcknowledgement" for method, _ in requests):
+            lines += [
+                "    ::ndk::ScopedAStatus responseAcknowledgement() override {",
+                "        return ::ndk::ScopedAStatus::ok();",
+                "    }",
+                "",
+            ]
 
         for method, params in requests:
             if method in ("setResponseFunctions", "responseAcknowledgement"):

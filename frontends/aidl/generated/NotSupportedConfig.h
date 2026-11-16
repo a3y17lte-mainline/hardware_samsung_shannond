@@ -22,10 +22,6 @@ class NotSupportedConfig : public ::aidl::android::hardware::radio::config::BnRa
         return ::ndk::ScopedAStatus::ok();
     }
 
-    ::ndk::ScopedAStatus responseAcknowledgement() override {
-        return ::ndk::ScopedAStatus::ok();
-    }
-
     ::ndk::ScopedAStatus getHalDeviceCapabilities(int32_t serial) override {
         if (auto r = response()) r->getHalDeviceCapabilitiesResponse(notSupported(serial), {});
         return ::ndk::ScopedAStatus::ok();
