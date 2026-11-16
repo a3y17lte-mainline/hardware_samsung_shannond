@@ -78,6 +78,7 @@ private:
 
     void readFmt();
     void readRfs();
+    void handleRfs(const RfsMessage &message);
     void handle(const Message &message);
     void finish(uint8_t mseq, const Result &result);
     uint8_t nextSeq();
@@ -87,6 +88,8 @@ private:
     int fmtFd_;
     int rfsFd_;
     std::vector<uint8_t> rfsBuffer_;
+    FrameAssembler fmtAssembler_{kFmtHeaderSize, 2, 0xffff};
+    FrameAssembler rfsAssembler_{kRfsHeaderSize, 4, 0x80000};
     uint8_t seq_ = 0;
     std::map<uint8_t, Pending> pending_;
     std::multimap<uint16_t, Listener> listeners_;

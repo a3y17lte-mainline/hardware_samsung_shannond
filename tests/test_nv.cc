@@ -118,4 +118,18 @@ TEST(rfs_service_answers_reads_and_writes)
     CHECK(loop.runUntil([&] { return fake.rfsReceived.size() == 4; }));
     CHECK(fake.rfsReceived[3].data[0] == 0);
     CHECK(nv.valid());
+
+    // In 2 KiB pieces, as the modem sends long messages: joined again
+    fake.rfsChunk = 2048;
+    Bytes data(3000);  // two pieces, within the 4 KiB test NV file
+    for (size_t i = 0; i < data.size(); i++)
+        data[i] = static_cast<uint8_t>(i);
+    fake.nvWrite(0x100, data);
+    CHECK(loop.runUntil([&] { return fake.rfsReceived.size() == 5; }));
+    {
+        ipc_rfs_nv_write_item_response_data w;
+        std::memcpy(&w, fake.rfsReceived[4].data.data(), sizeof(w));
+        CHECK(w.confirm == 1 && w.offset == 0x100 && w.length == data.size());
+        CHECK(*nv.read(0x100, data.size()) == data);
+    }
 }

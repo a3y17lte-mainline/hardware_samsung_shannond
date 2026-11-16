@@ -45,6 +45,9 @@ public:
     std::vector<Message> received;         // every IPC request
     std::vector<RfsMessage> rfsReceived;   // every RFS answer
     std::set<uint8_t> acceptedModes{0x01, 0x02, 0x08};
+    // Send RFS messages in pieces of this size, as the real modem's long
+    // ones arrive (0: whole)
+    size_t rfsChunk = 0;
 
     size_t count(uint16_t command) const;
 

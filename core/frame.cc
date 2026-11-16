@@ -3,6 +3,35 @@
 
 namespace shannond {
 
+std::vector<Bytes> FrameAssembler::add(std::span<const uint8_t> data, bool *bad)
+{
+    std::vector<Bytes> frames;
+
+    if (bad)
+        *bad = false;
+    pending_.insert(pending_.end(), data.begin(), data.end());
+
+    while (pending_.size() >= headerSize_) {
+        size_t length = 0;
+        for (size_t i = 0; i < lengthBytes_; i++)
+            length |= static_cast<size_t>(pending_[i]) << (8 * i);
+
+        if (length < headerSize_ || length > maxLength_) {
+            if (bad)
+                *bad = true;
+            pending_.clear();
+            break;
+        }
+        if (pending_.size() < length)
+            break;
+
+        frames.emplace_back(pending_.begin(), pending_.begin() + length);
+        pending_.erase(pending_.begin(), pending_.begin() + length);
+    }
+
+    return frames;
+}
+
 Bytes encodeFmt(const Message &message)
 {
     const size_t length = kFmtHeaderSize + message.data.size();

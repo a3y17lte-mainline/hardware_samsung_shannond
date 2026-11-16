@@ -213,7 +213,9 @@ void FakeModem::nvWrite(uint32_t offset, const Bytes &data)
     RfsMessage m{IPC_RFS_NV_WRITE_ITEM & 0xff, ++rfsSeq_, toBytes(req)};
     m.data.insert(m.data.end(), data.begin(), data.end());
     const Bytes frame = encodeRfs(m);
-    (void)!write(rfs_[1], frame.data(), frame.size());
+    const size_t chunk = rfsChunk ? rfsChunk : frame.size();
+    for (size_t at = 0; at < frame.size(); at += chunk)
+        (void)!write(rfs_[1], frame.data() + at, std::min(chunk, frame.size() - at));
 }
 
 void FakeModem::crash()

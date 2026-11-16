@@ -49,3 +49,30 @@ TEST(rfs_round_trip)
     CHECK(back && back->command == 1 && back->id == 4 && back->data == m.data);
     CHECK(!decodeRfs(Bytes{100, 0, 0, 0, 1, 1}));
 }
+
+TEST(assembler_joins_pieces_and_splits_reads)
+{
+    FrameAssembler rfs(kRfsHeaderSize, 4, 0x80000);
+    RfsMessage a{0x02, 1, Bytes(3000, 0xaa)};
+    RfsMessage b{0x03, 2, Bytes{1, 2}};
+    Bytes both = encodeRfs(a);
+    const Bytes second = encodeRfs(b);
+    both.insert(both.end(), second.begin(), second.end());
+
+    // Three reads: 2048, 2048, the rest; two messages come out
+    std::vector<Bytes> out;
+    for (size_t at = 0; at < both.size(); at += 2048) {
+        auto frames = rfs.add({both.data() + at, std::min<size_t>(2048, both.size() - at)});
+        out.insert(out.end(), frames.begin(), frames.end());
+    }
+    CHECK(out.size() == 2);
+    CHECK(decodeRfs(out[0])->data == a.data);
+    CHECK(decodeRfs(out[1])->id == 2);
+    CHECK(rfs.pending() == 0);
+
+    // A length that cannot be: dropped, reported, and the next one works
+    bool bad = false;
+    const Bytes junk{0x01, 0x00, 0x00, 0x00, 0x00, 0x00};
+    CHECK(rfs.add(junk, &bad).empty() && bad && rfs.pending() == 0);
+    CHECK(rfs.add(second, &bad).size() == 1 && !bad);
+}

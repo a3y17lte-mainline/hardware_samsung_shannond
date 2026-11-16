@@ -13,8 +13,8 @@ extern "C" {
 namespace shannond {
 
 namespace {
-// A FMT message has a 16 bit length; RFS messages carry NV data and are
-// longer (the kernel joins the modem's 2 KiB frames into one message)
+// What one read takes. A FMT message has a 16 bit length; RFS messages carry
+// NV data and can be longer, and both may arrive over several reads
 constexpr size_t kMaxFrame = 0x10000;
 constexpr size_t kMaxRfsFrame = 0x80000;
 }
@@ -191,20 +191,21 @@ void Modem::readFmt()
         return;
     }
 
-    auto message = decodeFmt({buffer, static_cast<size_t>(n)});
-    if (!message) {
-        log("bad IPC frame (%zd bytes)", n);
-        return;
+    bool bad = false;
+    for (const Bytes &frame : fmtAssembler_.add({buffer, static_cast<size_t>(n)}, &bad)) {
+        auto message = decodeFmt(frame);
+        if (message)
+            handle(*message);
     }
-    handle(*message);
+    if (bad)
+        log("bad IPC frame (%zd bytes read)", n);
 }
 
 void Modem::readRfs()
 {
     if (rfsBuffer_.size() < kMaxRfsFrame)
         rfsBuffer_.resize(kMaxRfsFrame);
-    uint8_t *buffer = rfsBuffer_.data();
-    const ssize_t n = read(rfsFd_, buffer, rfsBuffer_.size());
+    const ssize_t n = read(rfsFd_, rfsBuffer_.data(), rfsBuffer_.size());
 
     if (n <= 0) {
         if (n < 0 && (errno == EAGAIN || errno == EINTR))
@@ -213,18 +214,25 @@ void Modem::readRfs()
         return;
     }
 
-    auto message = decodeRfs({buffer, static_cast<size_t>(n)});
-    if (!message) {
-        log("bad RFS frame (%zd bytes)", n);
-        return;
+    bool bad = false;
+    auto frames = rfsAssembler_.add({rfsBuffer_.data(), static_cast<size_t>(n)}, &bad);
+    if (bad)
+        log("bad RFS frame (%zd bytes read)", n);
+    for (const Bytes &frame : frames) {
+        auto message = decodeRfs(frame);
+        if (message)
+            handleRfs(*message);
     }
+}
 
-    auto it = rfsHandlers_.find(message->command);
+void Modem::handleRfs(const RfsMessage &message)
+{
+    auto it = rfsHandlers_.find(message.command);
     if (it == rfsHandlers_.end()) {
-        log("unhandled RFS command 0x%02x", message->command);
+        log("unhandled RFS command 0x%02x", message.command);
         return;
     }
-    it->second(*message);
+    it->second(message);
 }
 
 void Modem::closed()
