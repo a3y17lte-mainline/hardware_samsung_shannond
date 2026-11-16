@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// modemd in an Android tree: the daemon core and the radio HAL. Expects
+// shannond in an Android tree: the daemon core and the radio HAL. Expects
 // libsamsung-ipc (a3y17lte branch) in the tree as well, for
 // libsamsung-ipc-shannon. Both stay in the root namespace.
 
 cc_defaults {
-    name: "modemd_defaults",
+    name: "shannond_defaults",
     vendor: true,
     cpp_std: "c++20",
     cflags: [
@@ -16,8 +16,8 @@ cc_defaults {
 }
 
 cc_library_static {
-    name: "libmodemd-core",
-    defaults: ["modemd_defaults"],
+    name: "libshannond-core",
+    defaults: ["shannond_defaults"],
     srcs: [
         "core/call.cc",
         "core/data.cc",
@@ -39,7 +39,7 @@ cc_library_static {
 
 cc_binary {
     name: "android.hardware.radio-service.a3y17lte",
-    defaults: ["modemd_defaults"],
+    defaults: ["shannond_defaults"],
     relative_install_path: "hw",
     init_rc: ["frontends/aidl/android.hardware.radio-service.a3y17lte.rc"],
     vintf_fragments: ["frontends/aidl/android.hardware.radio-service.a3y17lte.xml"],
@@ -64,7 +64,7 @@ cc_binary {
         "android.hardware.radio.network-V5-ndk",
         "android.hardware.radio.sim-V5-ndk",
         "android.hardware.radio.voice-V5-ndk",
-        "libmodemd-core",
+        "libshannond-core",
         "libsamsung-ipc-shannon",
     ],
     shared_libs: [

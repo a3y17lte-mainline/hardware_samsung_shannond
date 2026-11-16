@@ -11,7 +11,7 @@
 
 #include "core/modem.h"
 
-namespace modemd {
+namespace shannond {
 
 enum class CallState { Active, Holding, Dialing, Alerting, Incoming, Waiting };
 
@@ -68,4 +68,4 @@ private:
     uint8_t volume_ = 4;
 };
 
-}  // namespace modemd
+}  // namespace shannond

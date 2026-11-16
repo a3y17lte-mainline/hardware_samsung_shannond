@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// modemd for Linux: the core on the kernel's WWAN ports, controlled with
+// shannond for Linux: the core on the kernel's WWAN ports, controlled with
 // one-line commands on a Unix socket (try "help"). Events go to every
 // connected client. Nothing is dialled, sent or entered without a command:
 // the SIM in the phone is the user's own.
 //
-//   modemd [--nv FILE] [--nv-size N] [--socket PATH] [--apn APN]
+//   shannond [--nv FILE] [--nv-size N] [--socket PATH] [--apn APN]
 //          [--audio-hook PATH] [--radio-off]
 #include <cerrno>
 #include <fcntl.h>
@@ -32,14 +32,14 @@
 #include "core/sim.h"
 #include "core/sms.h"
 
-using namespace modemd;
+using namespace shannond;
 
 namespace {
 
 struct Options {
     std::string nv = "/var/lib/modem/nv/nv_data.bin";
     size_t nvSize = 0x100000;
-    std::string socket = "/run/modemd.sock";
+    std::string socket = "/run/shannond.sock";
     std::string apn;
     std::string audioHook = "/usr/libexec/samsungipcd/voicecall.sh";
     bool radio = true;
@@ -194,7 +194,7 @@ public:
     {
         clients_[fd] = "";
         loop_.watch(fd, EPOLLIN, [this, fd](uint32_t) { readClient(fd); });
-        reply(fd, "modemd ready; try help");
+        reply(fd, "shannond ready; try help");
     }
 
 private:
@@ -414,7 +414,7 @@ int main(int argc, char **argv)
         case 'h': options.audioHook = optarg; break;
         case 'r': options.radio = false; break;
         default:
-            std::fprintf(stderr, "usage: modemd [--nv FILE] [--nv-size N] [--socket PATH] "
+            std::fprintf(stderr, "usage: shannond [--nv FILE] [--nv-size N] [--socket PATH] "
                                  "[--apn APN] [--audio-hook PATH] [--radio-off]\n");
             return 2;
         }
@@ -455,7 +455,7 @@ int main(int argc, char **argv)
             daemon.client(fd);
     });
 
-    logLine("modemd running on " + *ipcPort + " + " + *rfsPort + ", socket " + options.socket);
+    logLine("shannond running on " + *ipcPort + " + " + *rfsPort + ", socket " + options.socket);
     loop.run();
 
     // The modem went away: exit, the service manager starts us again and

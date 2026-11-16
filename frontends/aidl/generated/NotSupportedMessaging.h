@@ -8,7 +8,7 @@
 
 #include "frontends/aidl/Response.h"
 
-namespace modemd::hal {
+namespace shannond::hal {
 
 class NotSupportedMessaging : public ::aidl::android::hardware::radio::messaging::BnRadioMessaging {
   public:
@@ -167,4 +167,4 @@ class NotSupportedMessaging : public ::aidl::android::hardware::radio::messaging
     std::shared_ptr<::aidl::android::hardware::radio::messaging::IRadioMessagingIndication> indication_;
 };
 
-}  // namespace modemd::hal
+}  // namespace shannond::hal

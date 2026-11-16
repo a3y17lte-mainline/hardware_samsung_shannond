@@ -3,7 +3,7 @@
 
 #include <aidl/android/hardware/radio/RadioAccessFamily.h>
 
-namespace modemd::hal {
+namespace shannond::hal {
 
 using ::aidl::android::hardware::radio::RadioAccessFamily;
 
@@ -168,4 +168,4 @@ void RadioModem::onResponseFunctionsSet()
     return ::ndk::ScopedAStatus::ok();
 }
 
-}  // namespace modemd::hal
+}  // namespace shannond::hal

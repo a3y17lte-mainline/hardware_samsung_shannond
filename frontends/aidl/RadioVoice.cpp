@@ -3,7 +3,7 @@
 
 #include <cstdio>
 
-namespace modemd::hal {
+namespace shannond::hal {
 
 namespace {
 
@@ -376,4 +376,4 @@ void RadioVoice::release(int32_t serial, const char *what)
     return ::ndk::ScopedAStatus::ok();
 }
 
-}  // namespace modemd::hal
+}  // namespace shannond::hal

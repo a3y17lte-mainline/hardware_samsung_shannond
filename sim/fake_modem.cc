@@ -10,7 +10,7 @@ extern "C" {
 #include <samsung-ipc.h>
 }
 
-namespace modemd {
+namespace shannond {
 
 namespace {
 
@@ -363,4 +363,4 @@ void FakeModem::handle(const Message &r)
     }
 }
 
-}  // namespace modemd
+}  // namespace shannond

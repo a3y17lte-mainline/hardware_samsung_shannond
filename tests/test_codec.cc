@@ -5,8 +5,8 @@
 #include "frontends/aidl/Codec.h"
 #include "tests/test.h"
 
-using namespace modemd;
-using namespace modemd::hal;
+using namespace shannond;
+using namespace shannond::hal;
 
 TEST(codec_hex)
 {

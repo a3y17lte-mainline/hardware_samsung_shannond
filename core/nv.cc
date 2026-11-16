@@ -13,7 +13,7 @@ extern "C" {
 #include <samsung-ipc.h>
 }
 
-namespace modemd {
+namespace shannond {
 
 namespace {
 
@@ -211,4 +211,4 @@ void RfsService::writeItem(const RfsMessage &request)
     modem_.sendRfs(response);
 }
 
-}  // namespace modemd
+}  // namespace shannond

@@ -6,7 +6,7 @@
 #include <aidl/android/hardware/radio/RadioAccessFamily.h>
 #include <aidl/android/hardware/radio/RadioTechnology.h>
 
-namespace modemd::hal {
+namespace shannond::hal {
 
 using ::aidl::android::hardware::radio::AccessNetwork;
 using ::aidl::android::hardware::radio::RadioAccessFamily;
@@ -466,4 +466,4 @@ RadioNetwork::RadioNetwork(std::shared_ptr<Stack> stack) : stack_(std::move(stac
     return ::ndk::ScopedAStatus::ok();
 }
 
-}  // namespace modemd::hal
+}  // namespace shannond::hal

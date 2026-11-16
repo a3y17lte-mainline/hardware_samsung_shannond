@@ -2,7 +2,7 @@
 #include "core/frame.h"
 #include "tests/test.h"
 
-using namespace modemd;
+using namespace shannond;
 
 TEST(fmt_round_trip)
 {

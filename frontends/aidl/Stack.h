@@ -22,7 +22,7 @@
 #include "core/sim.h"
 #include "core/sms.h"
 
-namespace modemd::hal {
+namespace shannond::hal {
 
 struct Config {
     std::string ipcPort = "wwan0sipc0";
@@ -73,4 +73,4 @@ private:
     std::thread thread_;
 };
 
-}  // namespace modemd::hal
+}  // namespace shannond::hal

@@ -18,7 +18,7 @@
 #include "core/frame.h"
 #include "core/loop.h"
 
-namespace modemd {
+namespace shannond {
 
 struct Result {
     bool ok = false;
@@ -97,4 +97,4 @@ private:
 
 const char *commandName(uint16_t command);
 
-}  // namespace modemd
+}  // namespace shannond

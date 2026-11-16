@@ -1,4 +1,4 @@
-# modemd
+# shannond
 
 An open daemon for the Samsung Shannon modem of the Galaxy A3 2017 (SM-A320F,
 Exynos7870), on the mainline kernel driver's WWAN ports. It replaces Samsung's
@@ -11,7 +11,7 @@ Layers:
   (the modem's non-volatile data, served from a file of our choice), and one
   module per domain: `Sim`, `Network`, `Data`, `Sms`, `Calls`. Single-threaded
   on an epoll `EventLoop`.
-- `frontends/cli/`: `modemd` for Linux, one-line commands on a Unix socket.
+- `frontends/cli/`: `shannond` for Linux, one-line commands on a Unix socket.
 - `frontends/aidl/`: the Android radio HAL (AIDL V5: config, modem, SIM,
   network, data, messaging, voice), `android.hardware.radio-service.a3y17lte`.
   The core runs on its own thread; binder calls are posted to its event loop.
@@ -27,8 +27,8 @@ a3y17lte), which carries the Shannon layouts worked out for this phone.
 
 Build and test on the host (clang for its sanitizer runtime):
 
-    CC=clang CXX=clang++ cmake -S . -B build -G Ninja -DMODEMD_SANITIZE=ON
-    ninja -C build && build/modemd_tests
+    CC=clang CXX=clang++ cmake -S . -B build -G Ninja -DSHANNOND_SANITIZE=ON
+    ninja -C build && build/shannond_tests
 
 In an Android tree (`Android.bp`): put this repository and libsamsung-ipc
 (its `Android.bp` builds `libsamsung-ipc-shannon`) into the tree, then build

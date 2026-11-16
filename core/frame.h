@@ -10,7 +10,7 @@
 #include <span>
 #include <vector>
 
-namespace modemd {
+namespace shannond {
 
 using Bytes = std::vector<uint8_t>;
 
@@ -58,4 +58,4 @@ Bytes toBytes(const T &value)
     return bytes;
 }
 
-}  // namespace modemd
+}  // namespace shannond

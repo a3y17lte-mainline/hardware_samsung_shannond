@@ -3,7 +3,7 @@
 
 #include <map>
 
-namespace modemd::hal {
+namespace shannond::hal {
 
 std::string toHex(const Bytes &bytes)
 {
@@ -219,4 +219,4 @@ AkaAnswer akaAnswer(uint8_t status, const std::vector<Bytes> &values)
     return a;
 }
 
-}  // namespace modemd::hal
+}  // namespace shannond::hal

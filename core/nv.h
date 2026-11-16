@@ -17,7 +17,7 @@
 
 #include "core/frame.h"
 
-namespace modemd {
+namespace shannond {
 
 class Modem;
 
@@ -60,4 +60,4 @@ private:
 
 std::string md5Hex(const Bytes &data, const std::string &secret);
 
-}  // namespace modemd
+}  // namespace shannond

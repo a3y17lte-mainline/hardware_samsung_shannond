@@ -6,7 +6,7 @@
 #include <optional>
 #include <string>
 
-namespace modemd {
+namespace shannond {
 
 // WWAN port types of the Exynos modem driver
 constexpr char kPortTypeIpc[] = "SIPC";
@@ -31,4 +31,4 @@ bool deleteLink(const std::string &name, std::string *error = nullptr);
 bool setLinkUp(const std::string &name, bool up, std::string *error = nullptr);
 bool linkExists(const std::string &name);
 
-}  // namespace modemd
+}  // namespace shannond

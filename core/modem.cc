@@ -10,7 +10,7 @@ extern "C" {
 #include <samsung-ipc.h>
 }
 
-namespace modemd {
+namespace shannond {
 
 namespace {
 constexpr size_t kMaxFrame = 0x10000;
@@ -241,4 +241,4 @@ void Modem::closed()
         onClosed_();
 }
 
-}  // namespace modemd
+}  // namespace shannond

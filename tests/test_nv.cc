@@ -14,7 +14,7 @@ extern "C" {
 #include <samsung-ipc.h>
 }
 
-using namespace modemd;
+using namespace shannond;
 
 namespace {
 
@@ -26,7 +26,7 @@ struct TempNv {
 
     TempNv()
     {
-        char tmpl[] = "/tmp/modemd-nv-XXXXXX";
+        char tmpl[] = "/tmp/shannond-nv-XXXXXX";
         dir = mkdtemp(tmpl);
         path = dir + "/nv_data.bin";
         Bytes data(kSize);

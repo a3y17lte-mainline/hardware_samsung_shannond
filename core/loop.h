@@ -13,7 +13,7 @@
 #include <vector>
 #include <unordered_map>
 
-namespace modemd {
+namespace shannond {
 
 class EventLoop {
 public:
@@ -63,4 +63,4 @@ private:
     std::multimap<Clock::time_point, Timer> timers_;
 };
 
-}  // namespace modemd
+}  // namespace shannond

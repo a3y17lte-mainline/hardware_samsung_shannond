@@ -6,7 +6,7 @@
 #include <sys/eventfd.h>
 #include <unistd.h>
 
-namespace modemd {
+namespace shannond {
 
 EventLoop::EventLoop()
     : epfd_(epoll_create1(EPOLL_CLOEXEC)), wakeFd_(eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK))
@@ -144,4 +144,4 @@ bool EventLoop::runUntil(const std::function<bool()> &pred,
     return true;
 }
 
-}  // namespace modemd
+}  // namespace shannond

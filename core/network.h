@@ -9,7 +9,7 @@
 
 #include "core/modem.h"
 
-namespace modemd {
+namespace shannond {
 
 enum class RegState { Unknown, NotRegistered, Searching, Home, Roaming, Denied, EmergencyOnly };
 enum class AccessTech { Unknown, Gsm, Gprs, Edge, Umts, Lte, Iwlan };
@@ -75,4 +75,4 @@ private:
     std::vector<std::function<void()>> readyCallbacks_;
 };
 
-}  // namespace modemd
+}  // namespace shannond

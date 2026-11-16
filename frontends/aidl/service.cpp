@@ -11,7 +11,7 @@
 
 #include "frontends/aidl/Services.h"
 
-using namespace modemd::hal;
+using namespace shannond::hal;
 
 namespace {
 

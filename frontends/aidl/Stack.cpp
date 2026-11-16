@@ -8,7 +8,7 @@
 
 #include "core/ports.h"
 
-namespace modemd::hal {
+namespace shannond::hal {
 
 Core::Core(EventLoop &loop, int fmt, int rfs, const Config &config)
     : modem(loop, fmt, rfs),
@@ -89,4 +89,4 @@ void Stack::run()
     loop_.run();
 }
 
-}  // namespace modemd::hal
+}  // namespace shannond::hal

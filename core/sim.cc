@@ -8,7 +8,7 @@ extern "C" {
 #include <samsung-ipc.h>
 }
 
-namespace modemd {
+namespace shannond {
 
 const char *simStateName(SimState state)
 {
@@ -243,4 +243,4 @@ void Sim::enterPin(const std::string &pin, std::function<void(bool)> done)
                    [done](const Result &r) { done(r.ok); });
 }
 
-}  // namespace modemd
+}  // namespace shannond

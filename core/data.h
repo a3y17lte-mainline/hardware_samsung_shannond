@@ -17,7 +17,7 @@
 #include "core/modem.h"
 #include "core/network.h"
 
-namespace modemd {
+namespace shannond {
 
 // Packet data channels 10-24 of the kernel driver
 constexpr unsigned int kDataChannels = 15;
@@ -94,4 +94,4 @@ private:
     std::vector<std::function<void(const DataCall &)>> changed_;
 };
 
-}  // namespace modemd
+}  // namespace shannond

@@ -3,7 +3,7 @@
 
 #include "tests/test.h"
 
-namespace modemd::test {
+namespace shannond::test {
 
 namespace {
 bool currentFailed = false;
@@ -26,11 +26,11 @@ bool failed()
     return currentFailed;
 }
 
-}  // namespace modemd::test
+}  // namespace shannond::test
 
 int main(int argc, char **argv)
 {
-    using namespace modemd::test;
+    using namespace shannond::test;
     int failures = 0, run = 0;
 
     for (auto &c : cases()) {

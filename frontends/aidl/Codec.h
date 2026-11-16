@@ -9,7 +9,7 @@
 
 #include "core/frame.h"
 
-namespace modemd::hal {
+namespace shannond::hal {
 
 std::string toHex(const Bytes &bytes);  // upper case, as the framework writes it
 std::optional<Bytes> fromHex(const std::string &hex);
@@ -49,4 +49,4 @@ struct AkaAnswer {
 // status and values as the modem reports them (0: RES, CK, IK; 4/5: AUTS)
 AkaAnswer akaAnswer(uint8_t status, const std::vector<Bytes> &values);
 
-}  // namespace modemd::hal
+}  // namespace shannond::hal

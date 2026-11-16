@@ -3,7 +3,7 @@
 
 #include "frontends/aidl/Codec.h"
 
-namespace modemd::hal {
+namespace shannond::hal {
 
 RadioMessaging::RadioMessaging(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
 {
@@ -125,4 +125,4 @@ void RadioMessaging::send(int32_t serial, const messaging::GsmSmsMessage &messag
     return ::ndk::ScopedAStatus::ok();
 }
 
-}  // namespace modemd::hal
+}  // namespace shannond::hal

@@ -16,7 +16,7 @@
 #include "core/frame.h"
 #include "core/loop.h"
 
-namespace modemd {
+namespace shannond {
 
 class FakeModem {
 public:
@@ -70,4 +70,4 @@ private:
     std::vector<FakeCall> calls_;
 };
 
-}  // namespace modemd
+}  // namespace shannond

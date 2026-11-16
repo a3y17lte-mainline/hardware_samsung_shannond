@@ -6,7 +6,7 @@
 
 #include "frontends/aidl/Codec.h"
 
-namespace modemd::hal {
+namespace shannond::hal {
 
 namespace {
 
@@ -400,4 +400,4 @@ void RadioSim::transmit(int32_t serial, const sim::SimApdu &message, bool logica
     return ::ndk::ScopedAStatus::ok();
 }
 
-}  // namespace modemd::hal
+}  // namespace shannond::hal

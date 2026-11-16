@@ -9,7 +9,7 @@
 #include <aidl/android/hardware/radio/data/ApnTypes.h>
 #include <aidl/android/hardware/radio/data/DataCallFailCause.h>
 
-namespace modemd::hal {
+namespace shannond::hal {
 
 using ::aidl::android::hardware::radio::AccessNetwork;
 
@@ -278,4 +278,4 @@ std::vector<data::SetupDataCallResult> RadioData::list(Core &core)
     return ::ndk::ScopedAStatus::ok();
 }
 
-}  // namespace modemd::hal
+}  // namespace shannond::hal

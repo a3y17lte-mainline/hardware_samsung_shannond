@@ -14,7 +14,7 @@ extern "C" {
 #include <samsung-ipc.h>
 }
 
-using namespace modemd;
+using namespace shannond;
 
 namespace {
 

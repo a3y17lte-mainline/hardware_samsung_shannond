@@ -6,7 +6,7 @@
 #include <aidl/android/hardware/radio/RadioResponseInfo.h>
 #include <aidl/android/hardware/radio/RadioResponseType.h>
 
-namespace modemd::hal {
+namespace shannond::hal {
 
 using ::aidl::android::hardware::radio::RadioError;
 using ::aidl::android::hardware::radio::RadioIndicationType;
@@ -35,4 +35,4 @@ inline RadioResponseInfo notAvailable(int32_t serial)
 }
 inline RadioResponseInfo failed(int32_t serial) { return responseInfo(serial, RadioError::GENERIC_FAILURE); }
 
-}  // namespace modemd::hal
+}  // namespace shannond::hal

@@ -9,7 +9,7 @@ extern "C" {
 #include <samsung-ipc.h>
 }
 
-namespace modemd {
+namespace shannond {
 
 namespace {
 
@@ -257,4 +257,4 @@ void Data::disconnect(unsigned int cid, std::function<void(bool)> done)
     });
 }
 
-}  // namespace modemd
+}  // namespace shannond

@@ -8,7 +8,7 @@ extern "C" {
 #include <samsung-ipc.h>
 }
 
-namespace modemd {
+namespace shannond {
 
 Sms::Sms(Modem &modem) : modem_(modem)
 {
@@ -94,4 +94,4 @@ void Sms::sendResult(const Message &message)
     done(result->ack == IPC_SMS_ACK_NO_ERROR, result->id);
 }
 
-}  // namespace modemd
+}  // namespace shannond

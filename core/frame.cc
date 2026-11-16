@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "core/frame.h"
 
-namespace modemd {
+namespace shannond {
 
 Bytes encodeFmt(const Message &message)
 {
@@ -73,4 +73,4 @@ std::optional<RfsMessage> decodeRfs(std::span<const uint8_t> frame)
     return message;
 }
 
-}  // namespace modemd
+}  // namespace shannond

@@ -7,7 +7,7 @@ extern "C" {
 #include <samsung-ipc.h>
 }
 
-namespace modemd {
+namespace shannond {
 
 const char *callStateName(CallState state)
 {
@@ -141,4 +141,4 @@ void Calls::dtmf(char tone, bool start, Done done)
     modem_.request(IPC_CALL_CONT_DTMF, IPC_TYPE_SET, data, [done](const Result &r) { done(r.ok); });
 }
 
-}  // namespace modemd
+}  // namespace shannond

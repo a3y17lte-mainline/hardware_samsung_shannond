@@ -16,7 +16,7 @@
 #include "frontends/aidl/generated/NotSupportedSim.h"
 #include "frontends/aidl/generated/NotSupportedVoice.h"
 
-namespace modemd::hal {
+namespace shannond::hal {
 
 namespace config = ::aidl::android::hardware::radio::config;
 namespace data = ::aidl::android::hardware::radio::data;
@@ -217,4 +217,4 @@ class RadioVoice : public NotSupportedVoice {
     char dtmfTone_ = 0;
 };
 
-}  // namespace modemd::hal
+}  // namespace shannond::hal

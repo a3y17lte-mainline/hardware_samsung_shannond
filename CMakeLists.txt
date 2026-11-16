@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(modemd CXX C)
+project(shannond CXX C)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -20,13 +20,13 @@ target_compile_definitions(samsung-ipc PRIVATE IPC_DEVICE_NAME="a3y17lte")
 target_compile_options(samsung-ipc PRIVATE -w)
 target_link_libraries(samsung-ipc PUBLIC OpenSSL::Crypto)
 
-option(MODEMD_SANITIZE "Build with ASan and UBSan" OFF)
-if(MODEMD_SANITIZE)
+option(SHANNOND_SANITIZE "Build with ASan and UBSan" OFF)
+if(SHANNOND_SANITIZE)
   add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
   add_link_options(-fsanitize=address,undefined)
 endif()
 
-add_library(modemd_core STATIC
+add_library(shannond_core STATIC
     core/frame.cc
     core/loop.cc
     core/modem.cc
@@ -38,14 +38,14 @@ add_library(modemd_core STATIC
     core/data.cc
     core/sms.cc
     core/call.cc)
-target_include_directories(modemd_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_compile_options(modemd_core PRIVATE -Wall -Wextra -Werror=return-type)
-target_link_libraries(modemd_core PUBLIC samsung-ipc)
+target_include_directories(shannond_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(shannond_core PRIVATE -Wall -Wextra -Werror=return-type)
+target_link_libraries(shannond_core PUBLIC samsung-ipc)
 
-add_executable(modemd frontends/cli/main.cc)
-target_link_libraries(modemd PRIVATE modemd_core)
+add_executable(shannond frontends/cli/main.cc)
+target_link_libraries(shannond PRIVATE shannond_core)
 
-add_executable(modemd_tests
+add_executable(shannond_tests
     sim/fake_modem.cc
     tests/main.cc
     tests/test_frame.cc
@@ -54,8 +54,8 @@ add_executable(modemd_tests
     tests/test_flow.cc
     tests/test_codec.cc
     frontends/aidl/Codec.cpp)
-target_link_libraries(modemd_tests PRIVATE modemd_core)
-target_compile_options(modemd_tests PRIVATE -Wall -Wextra)
+target_link_libraries(shannond_tests PRIVATE shannond_core)
+target_compile_options(shannond_tests PRIVATE -Wall -Wextra)
 
 enable_testing()
-add_test(NAME modemd_tests COMMAND modemd_tests)
+add_test(NAME shannond_tests COMMAND shannond_tests)

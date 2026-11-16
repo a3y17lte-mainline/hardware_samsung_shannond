@@ -4,7 +4,7 @@
 // alternative and is not used).
 #include "frontends/aidl/Services.h"
 
-namespace modemd::hal {
+namespace shannond::hal {
 
 ::ndk::ScopedAStatus RadioConfig::getHalDeviceCapabilities(int32_t serial)
 {
@@ -64,4 +64,4 @@ namespace modemd::hal {
     return ::ndk::ScopedAStatus::ok();
 }
 
-}  // namespace modemd::hal
+}  // namespace shannond::hal

@@ -126,7 +126,7 @@ def generate(api, version, out):
             "",
             '#include "frontends/aidl/Response.h"',
             "",
-            "namespace modemd::hal {",
+            "namespace shannond::hal {",
             "",
             f"class {cls} : public {ns}::Bn{name} {{",
             "  public:",
@@ -185,7 +185,7 @@ def generate(api, version, out):
             f"    std::shared_ptr<{ns}::{iface}Indication> indication_;",
             "};",
             "",
-            "}  // namespace modemd::hal",
+            "}  // namespace shannond::hal",
             "",
         ]
         (out / f"{cls}.h").write_text("\n".join(lines))

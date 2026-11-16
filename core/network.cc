@@ -8,7 +8,7 @@ extern "C" {
 #include <samsung-ipc.h>
 }
 
-namespace modemd {
+namespace shannond {
 
 namespace {
 
@@ -247,4 +247,4 @@ void Network::probeNext(uint8_t bit, uint8_t accepted, std::function<void(uint8_
                    });
 }
 
-}  // namespace modemd
+}  // namespace shannond

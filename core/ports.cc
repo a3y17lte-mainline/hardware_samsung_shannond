@@ -6,7 +6,7 @@
 #include <fstream>
 #include <unistd.h>
 
-namespace modemd {
+namespace shannond {
 
 namespace {
 
@@ -67,4 +67,4 @@ int openPort(const std::string &port)
     return open(path.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
 }
 
-}  // namespace modemd
+}  // namespace shannond

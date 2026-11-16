@@ -14,7 +14,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace modemd {
+namespace shannond {
 
 namespace {
 
@@ -131,4 +131,4 @@ bool linkExists(const std::string &name)
     return if_nametoindex(name.c_str()) != 0;
 }
 
-}  // namespace modemd
+}  // namespace shannond

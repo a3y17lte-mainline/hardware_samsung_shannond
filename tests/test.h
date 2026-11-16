@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace modemd::test {
+namespace shannond::test {
 
 struct Case {
     const char *name;
@@ -23,17 +23,17 @@ struct Register {
     Register(const char *name, std::function<void()> body) { cases().push_back({name, std::move(body)}); }
 };
 
-}  // namespace modemd::test
+}  // namespace shannond::test
 
 #define TEST(name)                                                               \
     static void test_##name();                                                   \
-    static ::modemd::test::Register register_##name(#name, test_##name);        \
+    static ::shannond::test::Register register_##name(#name, test_##name);        \
     static void test_##name()
 
 #define CHECK(expression)                                                        \
     do {                                                                         \
         if (!(expression)) {                                                     \
-            ::modemd::test::fail(__FILE__, __LINE__, #expression);               \
+            ::shannond::test::fail(__FILE__, __LINE__, #expression);               \
             return;                                                              \
         }                                                                        \
     } while (0)

@@ -11,7 +11,7 @@
 
 #include "core/modem.h"
 
-namespace modemd {
+namespace shannond {
 
 class Sms {
 public:
@@ -42,4 +42,4 @@ private:
     std::deque<Sent> sending_;
 };
 
-}  // namespace modemd
+}  // namespace shannond

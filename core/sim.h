@@ -14,7 +14,7 @@
 
 #include "core/modem.h"
 
-namespace modemd {
+namespace shannond {
 
 enum class SimState { Unknown, Absent, NotReady, PinRequired, PukRequired, NetworkLocked, Ready, Error };
 
@@ -82,4 +82,4 @@ private:
     std::vector<std::function<void()>> changed_;
 };
 
-}  // namespace modemd
+}  // namespace shannond
