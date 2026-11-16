@@ -158,7 +158,7 @@ void Sim::io(uint8_t command, uint16_t fileId, const std::vector<uint16_t> &path
              std::function<void(std::optional<SimIoResult>)> done)
 {
     ipc_sec_rsim_aid_request_header header;
-    if (ipc_sec_rsim_aid_setup(&header, command, app ? app->type : 0,
+    if (ipc_sec_rsim_aid_setup(&header, command, app ? app->type : kSimAppNone,
                                app ? app->aid.data() : nullptr, app ? app->aid.size() : 0,
                                fileId, path.data(), path.size(), p1, p2, p3) < 0) {
         done(std::nullopt);

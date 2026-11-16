@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "sim/fake_modem.h"
 
+#include "core/sim.h"
+
 #include <cstring>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -270,10 +272,10 @@ void FakeModem::handle(const Message &r)
         auto *apps = reinterpret_cast<ipc_sec_sim_app *>(data.data() + 1);
         static const uint8_t usim[] = {0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x02};
         static const uint8_t isim[] = {0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04};
-        apps[0].type = 2;
+        apps[0].type = kSimAppUsim;
         apps[0].aid_length = sizeof(usim);
         std::memcpy(apps[0].aid, usim, sizeof(usim));
-        apps[1].type = 5;
+        apps[1].type = kSimAppIsim;
         apps[1].aid_length = sizeof(isim);
         std::memcpy(apps[1].aid, isim, sizeof(isim));
         respond(r, data);

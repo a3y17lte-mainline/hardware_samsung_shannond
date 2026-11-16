@@ -59,4 +59,9 @@ int32_t lastCallFailCause(uint8_t causeType, uint8_t cause);
 // are its own, not the 3GPP ones
 int32_t dataCallFailCause(uint8_t cause);
 
+// The modem's SIM application type (IPC_SEC_SIM_APPS_INFO) as Android's
+// AppStatus type, as the stock RIL converts it: 0 USIM, 1 ISIM, 2 CSIM,
+// 3 SIM, 4 RUIM, anything else unknown
+int32_t androidAppType(uint8_t modemType);
+
 }  // namespace shannond::hal

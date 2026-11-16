@@ -30,8 +30,14 @@ enum class SimState {
 
 const char *simStateName(SimState state);
 
+// The modem's application types (IPC_SEC_SIM_APPS_INFO and the file access
+// request), which differ from Android's
+constexpr uint8_t kSimAppUsim = 0;
+constexpr uint8_t kSimAppIsim = 1;
+constexpr uint8_t kSimAppNone = 6;  // a file access without an application
+
 struct SimApp {
-    uint8_t type = 0;
+    uint8_t type = 0;  // kSimApp*
     Bytes aid;
     uint8_t pin1State = 0;
     uint8_t pin2State = 0;

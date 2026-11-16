@@ -52,7 +52,7 @@ TEST(boot_brings_sim_registration_and_identities)
     CHECK(s.network.data().tech == AccessTech::Lte);
     CHECK(s.network.voice().state == RegState::Home);
     CHECK(s.loop.runUntil([&] { return s.network.operatorCode() == "23002"; }));
-    CHECK(s.sim.apps()[1].type == 5);
+    CHECK(s.sim.apps()[0].type == kSimAppUsim && s.sim.apps()[1].type == kSimAppIsim);
     // Packet service was switched on with the modem's start
     CHECK(s.fake.count(IPC_NET_SERVICE_DOMAIN_CONFIG) == 1);
     // No PIN was ever sent
@@ -226,7 +226,7 @@ TEST(sim_services_for_ims)
     for (auto &m : s.fake.received) {
         if (m.command == IPC_SEC_RSIM_ACCESS) {
             auto h = m.as<ipc_sec_rsim_aid_request_header>();
-            CHECK(h && h->app_type == 5 && h->aid_length == 7 && h->path_length == 2);
+            CHECK(h && h->app_type == kSimAppIsim && h->aid_length == 7 && h->path_length == 2);
         }
     }
 

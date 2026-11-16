@@ -45,12 +45,27 @@ sim::IccIoResult apduResult(const Bytes &response)
     return result;
 }
 
-sim::PinState pinState(uint8_t raw, bool ready)
+// The modem gives one PIN status per application (0 fine, 1 PIN1 wanted,
+// 2 PUK1, 3 PIN2, 4 PUK2, 5 blocked for good), read as the stock RIL does
+sim::PinState pin1State(uint8_t raw, bool ready)
+{
+    if (ready)
+        return sim::PinState::ENABLED_VERIFIED;
+    switch (raw) {
+    case 0: return sim::PinState::ENABLED_VERIFIED;
+    case 1: return sim::PinState::ENABLED_NOT_VERIFIED;
+    case 2: return sim::PinState::ENABLED_BLOCKED;
+    case 5: return sim::PinState::ENABLED_PERM_BLOCKED;
+    default: return sim::PinState::UNKNOWN;
+    }
+}
+
+sim::PinState pin2State(uint8_t raw)
 {
     switch (raw) {
-    case 0: return sim::PinState::DISABLED;
-    case 1: return ready ? sim::PinState::ENABLED_VERIFIED : sim::PinState::ENABLED_NOT_VERIFIED;
-    case 2: return sim::PinState::ENABLED_BLOCKED;
+    case 0: return sim::PinState::ENABLED_VERIFIED;
+    case 3: return sim::PinState::ENABLED_NOT_VERIFIED;
+    case 4: return sim::PinState::ENABLED_BLOCKED;
     case 5: return sim::PinState::ENABLED_PERM_BLOCKED;
     default: return sim::PinState::UNKNOWN;
     }
@@ -125,8 +140,7 @@ RadioSim::RadioSim(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
             const auto &apps = core->sim.apps();
             for (size_t i = 0; i < apps.size(); i++) {
                 sim::AppStatus app;
-                // The modem reports the framework's application types
-                app.appType = apps[i].type;
+                app.appType = androidAppType(apps[i].type);
                 app.appState = appState;
                 app.persoSubstate = state == SimState::NetworkLocked
                                             ? persoSubstate(core->sim.lockStatus(),
@@ -135,8 +149,8 @@ RadioSim::RadioSim(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
                 app.aidPtr = toHex(apps[i].aid);
                 app.pin1 = state == SimState::PermanentlyBlocked
                                    ? sim::PinState::ENABLED_PERM_BLOCKED
-                                   : pinState(apps[i].pin1State, state == SimState::Ready);
-                app.pin2 = pinState(apps[i].pin2State, false);
+                                   : pin1State(apps[i].pin1State, state == SimState::Ready);
+                app.pin2 = pin2State(apps[i].pin2State);
                 status.applications.push_back(app);
 
                 if (app.appType == sim::AppStatus::APP_TYPE_USIM ||

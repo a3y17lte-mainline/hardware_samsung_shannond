@@ -103,6 +103,17 @@ TEST(codec_data_fail_cause)
     CHECK(dataCallFailCause(0xee) == 0x0e);  // unknown
 }
 
+TEST(codec_app_type)
+{
+    // The stock RIL's table: the modem's USIM is 0, not Android's 2
+    CHECK(androidAppType(0) == 2);
+    CHECK(androidAppType(1) == 5);
+    CHECK(androidAppType(2) == 4);
+    CHECK(androidAppType(3) == 1);
+    CHECK(androidAppType(4) == 3);
+    CHECK(androidAppType(6) == 0);
+}
+
 TEST(codec_aka)
 {
     Bytes challenge{16};

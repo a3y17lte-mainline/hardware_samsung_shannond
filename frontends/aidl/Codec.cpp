@@ -267,6 +267,18 @@ int32_t lastCallFailCause(uint8_t causeType, uint8_t cause)
     }
 }
 
+int32_t androidAppType(uint8_t modemType)
+{
+    switch (modemType) {
+    case 0: return 2;  // USIM
+    case 1: return 5;  // ISIM
+    case 2: return 4;  // CSIM
+    case 3: return 1;  // SIM
+    case 4: return 3;  // RUIM
+    default: return 0;
+    }
+}
+
 int32_t dataCallFailCause(uint8_t cause)
 {
     switch (cause) {
