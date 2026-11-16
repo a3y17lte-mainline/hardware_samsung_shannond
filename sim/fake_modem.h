@@ -1,0 +1,73 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// A synthetic modem for tests. It sits on the other end of two
+// SOCK_SEQPACKET socket pairs, which keep message boundaries like the
+// kernel's WWAN ports, and answers in the order the A3's modem did on the
+// phone (boot, SIM, LTE registration, data, SMS, calls). The payloads are
+// built from the documented layouts, so the tests check the daemon's logic
+// against our reading of the protocol, not against the modem itself.
+#pragma once
+
+#include <functional>
+#include <set>
+#include <string>
+#include <vector>
+
+#include "core/frame.h"
+#include "core/loop.h"
+
+namespace modemd {
+
+class FakeModem {
+public:
+    explicit FakeModem(EventLoop &loop);
+    ~FakeModem();
+
+    // The daemon's ends
+    int fmtFd() const { return fmt_[0]; }
+    int rfsFd() const { return rfs_[0]; }
+
+    // What a modem sends after its stack started and found the SIM
+    void boot();
+    void incomingSms(const Bytes &pdu);
+    void incomingCall(const std::string &number);
+    void remoteHangup();
+    // The modem asks for or changes NV data
+    void nvRead(uint32_t offset, uint32_t length);
+    void nvWrite(uint32_t offset, const Bytes &data);
+    // Close the modem's ends: the daemon sees the hang-up of a crash
+    void crash();
+
+    std::vector<Message> received;         // every IPC request
+    std::vector<RfsMessage> rfsReceived;   // every RFS answer
+    std::set<uint8_t> acceptedModes{0x01, 0x02, 0x08};
+
+    size_t count(uint16_t command) const;
+
+private:
+    void readFmt();
+    void readRfs();
+    void handle(const Message &request);
+    void send(uint16_t command, uint8_t type, const Bytes &data, uint8_t aseq = 0);
+    void ack(const Message &request, bool ok = true);
+    void respond(const Message &request, const Bytes &data);
+    void sendRegistration(uint8_t domain, uint8_t aseq);
+    Bytes callList() const;
+    void setCallState(uint8_t status);
+
+    EventLoop &loop_;
+    int fmt_[2];
+    int rfs_[2];
+    uint8_t seq_ = 0x80;
+    uint8_t rfsSeq_ = 0;
+
+    struct FakeCall {
+        uint8_t id;
+        uint8_t status;
+        bool incoming;
+        std::string number;
+    };
+    std::vector<FakeCall> calls_;
+};
+
+}  // namespace modemd
