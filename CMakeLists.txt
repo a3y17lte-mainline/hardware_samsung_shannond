@@ -16,7 +16,6 @@ add_library(samsung-ipc STATIC ${SIPC_SOURCES})
 target_include_directories(samsung-ipc
     PUBLIC ${LIBSAMSUNG_IPC_DIR}/include
     PRIVATE ${LIBSAMSUNG_IPC_DIR}/samsung-ipc)
-target_compile_definitions(samsung-ipc PRIVATE IPC_DEVICE_NAME="a3y17lte")
 target_compile_options(samsung-ipc PRIVATE -w)
 target_link_libraries(samsung-ipc PUBLIC OpenSSL::Crypto)
 
