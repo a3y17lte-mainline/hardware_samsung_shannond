@@ -16,7 +16,17 @@
 
 namespace shannond {
 
-enum class SimState { Unknown, Absent, NotReady, PinRequired, PukRequired, NetworkLocked, Ready, Error };
+enum class SimState {
+    Unknown,
+    Absent,
+    NotReady,
+    PinRequired,
+    PukRequired,
+    PermanentlyBlocked,  // PUK attempts used up
+    NetworkLocked,       // a personalisation lock: lockStatus() says which
+    Ready,
+    Error,
+};
 
 const char *simStateName(SimState state);
 
@@ -47,6 +57,10 @@ public:
     const std::string &imsi() const { return imsi_; }
     const std::string &iccid() const { return iccid_; }
     const std::vector<SimApp> &apps() const { return apps_; }
+    // The raw lock of the last IPC_SEC_PIN_STATUS (IPC_SEC_PIN_STATUS_LOCK_*,
+    // SIM_LOCK_REQUIRED) and its facility lock type (1 = code, 2 = PUK)
+    uint8_t lockStatus() const { return lockStatus_; }
+    uint8_t facilityLock() const { return facilityLock_; }
 
     void onChanged(std::function<void()> callback) { changed_.push_back(std::move(callback)); }
 
@@ -79,6 +93,8 @@ private:
     std::string imsi_;
     std::string iccid_;
     std::vector<SimApp> apps_;
+    uint8_t lockStatus_ = 0;
+    uint8_t facilityLock_ = 0;
     std::vector<std::function<void()>> changed_;
 };
 

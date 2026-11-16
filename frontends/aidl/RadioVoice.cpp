@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "frontends/aidl/Services.h"
 
+#include "frontends/aidl/Codec.h"
+
 #include <cstdio>
 
 namespace shannond::hal {
@@ -21,16 +23,6 @@ int32_t callState(CallState state)
     return voice::Call::STATE_ACTIVE;
 }
 
-voice::LastCallFailCause failCause(uint8_t raw)
-{
-    // Samsung's end causes (IPC_CALL_END_CAUSE_*), not 3GPP ones
-    switch (raw) {
-    case 0x05: return voice::LastCallFailCause::NORMAL;
-    case 0x2f: return voice::LastCallFailCause::CALL_REJECTED;
-    case 0x10: return voice::LastCallFailCause::NORMAL_UNSPECIFIED;
-    default: return voice::LastCallFailCause::ERROR_UNSPECIFIED;
-    }
-}
 
 bool hasIncoming(const std::vector<Call> &calls)
 {
@@ -225,10 +217,11 @@ void RadioVoice::release(int32_t serial, const char *what)
             r->getLastCallFailCauseResponse(notAvailable(serial), info);
             return;
         }
-        const uint8_t raw = core->calls.lastEndCause();
-        char vendor[8];
-        snprintf(vendor, sizeof(vendor), "0x%02x", raw);
-        info.causeCode = failCause(raw);
+        const uint8_t type = core->calls.lastEndCauseType();
+        const uint8_t cause = core->calls.lastEndCause();
+        char vendor[16];
+        snprintf(vendor, sizeof(vendor), "0x%02x/0x%02x", type, cause);
+        info.causeCode = static_cast<voice::LastCallFailCause>(lastCallFailCause(type, cause));
         info.vendorCause = vendor;
         r->getLastCallFailCauseResponse(ok(serial), info);
     });

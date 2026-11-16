@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "frontends/aidl/Services.h"
 
+#include "frontends/aidl/Codec.h"
+
 #include <arpa/inet.h>
 #include <algorithm>
 #include <cstdint>
@@ -111,11 +113,12 @@ data::SetupDataCallResult result(const DataCall &call)
     return r;
 }
 
+// A failed call with the modem's cause
 data::SetupDataCallResult failure(uint8_t cause)
 {
     data::SetupDataCallResult r;
-    // The enum's values are the 3GPP ESM/SM cause numbers
-    r.cause = cause ? static_cast<data::DataCallFailCause>(cause)
+    // The modem's codes are its own: converted as the stock RIL does
+    r.cause = cause ? static_cast<data::DataCallFailCause>(dataCallFailCause(cause))
                     : data::DataCallFailCause::ERROR_UNSPECIFIED;
     r.suggestedRetryTime = -1;
     r.active = data::SetupDataCallResult::DATA_CONNECTION_STATUS_INACTIVE;
@@ -181,10 +184,11 @@ std::vector<data::SetupDataCallResult> RadioData::list(Core &core)
             if (!core->data.calls().count(c))
                 cid = c;
         if (!cid) {
-            if (auto r = response())
-                r->setupDataCallResponse(ok(serial),
-                                         failure(static_cast<uint8_t>(
-                                                 data::DataCallFailCause::INSUFFICIENT_RESOURCES)));
+            if (auto r = response()) {
+                data::SetupDataCallResult full = failure(0);
+                full.cause = data::DataCallFailCause::INSUFFICIENT_RESOURCES;
+                r->setupDataCallResponse(ok(serial), full);
+            }
             return;
         }
 

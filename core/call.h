@@ -32,7 +32,9 @@ public:
     explicit Calls(Modem &modem);
 
     const std::vector<Call> &list() const { return calls_; }
-    uint8_t lastEndCause() const { return lastEndCause_; }  // raw, from the modem
+    // The last call's end, raw from the modem (IPC_CALL_STATUS cause type and cause)
+    uint8_t lastEndCause() const { return lastEndCause_; }
+    uint8_t lastEndCauseType() const { return lastEndCauseType_; }
     void onChanged(std::function<void()> callback) { changed_.push_back(std::move(callback)); }
     // Called with true when the first call connects or rings out, false when
     // the last one ends
@@ -64,6 +66,7 @@ private:
     std::function<void(bool)> audio_;
     bool audioActive_ = false;
     uint8_t lastEndCause_ = 0;
+    uint8_t lastEndCauseType_ = 0;
     uint8_t audioPath_ = 0x01;  // handset
     uint8_t volume_ = 4;
 };

@@ -27,15 +27,23 @@ AccessTech techFromRaw(uint8_t raw)
     }
 }
 
+// As the stock RIL converts them (ConvertIpcToRegState). Status 4 is a
+// refused registration, the state the modem is in without a SIM; whether
+// emergency calls are possible is up to the front end (Android: the _EM
+// states for searching, denied and unknown)
 RegState stateFromRaw(uint8_t raw)
 {
     switch (raw) {
-    case IPC_NET_REGISTRATION_STATUS_NONE: return RegState::NotRegistered;
+    case IPC_NET_REGISTRATION_STATUS_NONE:
+    case 0x08:
+        return RegState::NotRegistered;
     case IPC_NET_REGISTRATION_STATUS_HOME: return RegState::Home;
     case IPC_NET_REGISTRATION_STATUS_SEARCHING: return RegState::Searching;
-    case IPC_NET_REGISTRATION_STATUS_EMERGENCY: return RegState::Denied;
+    case IPC_NET_REGISTRATION_STATUS_EMERGENCY:
+    case 0x09:
+        return RegState::Denied;
     case IPC_NET_REGISTRATION_STATUS_ROAMING: return RegState::Roaming;
-    default: return RegState::Unknown;
+    default: return RegState::Unknown;  // 5, and 7/10 (ePDG, not supported)
     }
 }
 

@@ -13,7 +13,10 @@ extern "C" {
 namespace shannond {
 
 namespace {
+// A FMT message has a 16 bit length; RFS messages carry NV data and are
+// longer (the kernel joins the modem's 2 KiB frames into one message)
 constexpr size_t kMaxFrame = 0x10000;
+constexpr size_t kMaxRfsFrame = 0x80000;
 }
 
 const char *commandName(uint16_t command)
@@ -198,8 +201,10 @@ void Modem::readFmt()
 
 void Modem::readRfs()
 {
-    uint8_t buffer[kMaxFrame];
-    const ssize_t n = read(rfsFd_, buffer, sizeof(buffer));
+    if (rfsBuffer_.size() < kMaxRfsFrame)
+        rfsBuffer_.resize(kMaxRfsFrame);
+    uint8_t *buffer = rfsBuffer_.data();
+    const ssize_t n = read(rfsFd_, buffer, rfsBuffer_.size());
 
     if (n <= 0) {
         if (n < 0 && (errno == EAGAIN || errno == EINTR))

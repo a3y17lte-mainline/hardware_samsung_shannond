@@ -103,6 +103,25 @@ void FakeModem::sendRegistration(uint8_t domain, uint8_t aseq)
     send(IPC_NET_REGIST, aseq ? IPC_TYPE_RESP : IPC_TYPE_NOTI, toBytes(reg), aseq);
 }
 
+void FakeModem::limitedService()
+{
+    for (uint8_t domain : {IPC_NET_SERVICE_DOMAIN_GSM, IPC_NET_SERVICE_DOMAIN_GPRS}) {
+        ipc_net_regist_response_data reg{};
+        reg.act = 0x01;  // GSM
+        reg.domain = domain;
+        reg.status = IPC_NET_REGISTRATION_STATUS_EMERGENCY;
+        send(IPC_NET_REGIST, IPC_TYPE_NOTI, toBytes(reg));
+    }
+}
+
+void FakeModem::pinStatus(uint8_t status, uint8_t facilityLock)
+{
+    ipc_sec_pin_status_response_data pin{};
+    pin.status = status;
+    pin.facility_lock = facilityLock;
+    send(IPC_SEC_PIN_STATUS, IPC_TYPE_NOTI, toBytes(pin));
+}
+
 void FakeModem::readFmt()
 {
     uint8_t buffer[0x10000];

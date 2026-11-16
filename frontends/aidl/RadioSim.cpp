@@ -6,6 +6,10 @@
 
 #include "frontends/aidl/Codec.h"
 
+extern "C" {
+#include <samsung-ipc.h>
+}
+
 namespace shannond::hal {
 
 namespace {
@@ -52,6 +56,27 @@ sim::PinState pinState(uint8_t raw, bool ready)
     }
 }
 
+// The personalisation lock, as the stock RIL reports it (a facility lock of
+// 2 asks for the lock's PUK)
+sim::PersoSubstate persoSubstate(uint8_t lock, uint8_t facility)
+{
+    const bool puk = facility == 2;
+    switch (lock) {
+    case IPC_SEC_PIN_STATUS_SIM_LOCK_REQUIRED: return sim::PersoSubstate::SIM_SIM;
+    case IPC_SEC_PIN_STATUS_LOCK_PN:
+        return puk ? sim::PersoSubstate::SIM_NETWORK_PUK : sim::PersoSubstate::SIM_NETWORK;
+    case IPC_SEC_PIN_STATUS_LOCK_PU:
+        return puk ? sim::PersoSubstate::SIM_NETWORK_SUBSET_PUK
+                   : sim::PersoSubstate::SIM_NETWORK_SUBSET;
+    case IPC_SEC_PIN_STATUS_LOCK_PP:
+        return puk ? sim::PersoSubstate::SIM_SERVICE_PROVIDER_PUK
+                   : sim::PersoSubstate::SIM_SERVICE_PROVIDER;
+    case IPC_SEC_PIN_STATUS_LOCK_PC:
+        return puk ? sim::PersoSubstate::SIM_CORPORATE_PUK : sim::PersoSubstate::SIM_CORPORATE;
+    default: return sim::PersoSubstate::UNKNOWN;
+    }
+}
+
 }  // namespace
 
 RadioSim::RadioSim(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
@@ -89,7 +114,10 @@ RadioSim::RadioSim(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
             switch (state) {
             case SimState::Ready: appState = sim::AppStatus::APP_STATE_READY; break;
             case SimState::PinRequired: appState = sim::AppStatus::APP_STATE_PIN; break;
-            case SimState::PukRequired: appState = sim::AppStatus::APP_STATE_PUK; break;
+            case SimState::PukRequired:
+            case SimState::PermanentlyBlocked:
+                appState = sim::AppStatus::APP_STATE_PUK;
+                break;
             case SimState::NetworkLocked: appState = sim::AppStatus::APP_STATE_SUBSCRIPTION_PERSO; break;
             default: break;
             }
@@ -100,10 +128,14 @@ RadioSim::RadioSim(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
                 // The modem reports the framework's application types
                 app.appType = apps[i].type;
                 app.appState = appState;
-                app.persoSubstate = state == SimState::NetworkLocked ? sim::PersoSubstate::SIM_NETWORK
-                                                                     : sim::PersoSubstate::READY;
+                app.persoSubstate = state == SimState::NetworkLocked
+                                            ? persoSubstate(core->sim.lockStatus(),
+                                                            core->sim.facilityLock())
+                                            : sim::PersoSubstate::READY;
                 app.aidPtr = toHex(apps[i].aid);
-                app.pin1 = pinState(apps[i].pin1State, state == SimState::Ready);
+                app.pin1 = state == SimState::PermanentlyBlocked
+                                   ? sim::PinState::ENABLED_PERM_BLOCKED
+                                   : pinState(apps[i].pin1State, state == SimState::Ready);
                 app.pin2 = pinState(apps[i].pin2State, false);
                 status.applications.push_back(app);
 

@@ -49,4 +49,14 @@ struct AkaAnswer {
 // status and values as the modem reports them (0: RES, CK, IK; 4/5: AUTS)
 AkaAnswer akaAnswer(uint8_t status, const std::vector<Bytes> &values);
 
+// The modem's call end (IPC_CALL_STATUS: cause type and cause) as Android's
+// LastCallFailCause value, as the stock RIL converts it (GetReleaseCause,
+// without its operator specific branches)
+int32_t lastCallFailCause(uint8_t causeType, uint8_t cause);
+
+// The modem's data call fail cause as Android's DataCallFailCause value, as
+// the stock RIL converts it (ConvertDataFailCauseFromIpc); the modem's codes
+// are its own, not the 3GPP ones
+int32_t dataCallFailCause(uint8_t cause);
+
 }  // namespace shannond::hal

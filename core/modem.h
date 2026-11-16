@@ -86,6 +86,7 @@ private:
     EventLoop &loop_;
     int fmtFd_;
     int rfsFd_;
+    std::vector<uint8_t> rfsBuffer_;
     uint8_t seq_ = 0;
     std::map<uint8_t, Pending> pending_;
     std::multimap<uint16_t, Listener> listeners_;

@@ -18,6 +18,7 @@ const char *simStateName(SimState state)
     case SimState::NotReady: return "not-ready";
     case SimState::PinRequired: return "pin-required";
     case SimState::PukRequired: return "puk-required";
+    case SimState::PermanentlyBlocked: return "permanently-blocked";
     case SimState::NetworkLocked: return "network-locked";
     case SimState::Ready: return "ready";
     case SimState::Error: return "error";
@@ -83,6 +84,10 @@ void Sim::pinStatus(const Message &message)
     if (!status)
         return;
 
+    lockStatus_ = status->status;
+    facilityLock_ = status->facility_lock;
+
+    // As the stock RIL reads it (IpcSimCache::GenerateSimStatus)
     switch (status->status) {
     case IPC_SEC_PIN_STATUS_READY:
     case IPC_SEC_PIN_STATUS_INIT_COMPLETE:
@@ -94,7 +99,7 @@ void Sim::pinStatus(const Message &message)
         if (status->facility_lock == IPC_SEC_FACILITY_LOCK_TYPE_SC_PUK_REQ)
             setState(SimState::PukRequired);
         else if (status->facility_lock == IPC_SEC_FACILITY_LOCK_TYPE_SC_CARD_BLOCKED)
-            setState(SimState::Error);
+            setState(SimState::PermanentlyBlocked);
         else
             setState(SimState::PinRequired);
         break;

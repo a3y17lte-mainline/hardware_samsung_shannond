@@ -32,6 +32,10 @@ public:
     void incomingSms(const Bytes &pdu);
     void incomingCall(const std::string &number);
     void remoteHangup();
+    // Camped on a GSM cell without registering: no SIM, emergency calls only
+    void limitedService();
+    // The SIM's state changes (IPC_SEC_PIN_STATUS)
+    void pinStatus(uint8_t status, uint8_t facilityLock);
     // The modem asks for or changes NV data
     void nvRead(uint32_t offset, uint32_t length);
     void nvWrite(uint32_t offset, const Bytes &data);

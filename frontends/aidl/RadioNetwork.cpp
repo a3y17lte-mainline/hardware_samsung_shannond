@@ -62,17 +62,28 @@ RadioTechnology technology(AccessTech tech)
     }
 }
 
+// Searching, denied and unknown are reported as their "emergency calls
+// possible" variants, as the stock RIL does (NetRegState::SetEmergencyState):
+// Android then shows "Emergency calls only" instead of "No service"
 network::RegState regState(RegState state)
 {
     switch (state) {
     case RegState::NotRegistered: return network::RegState::NOT_REG_MT_NOT_SEARCHING_OP;
-    case RegState::Searching: return network::RegState::NOT_REG_MT_SEARCHING_OP;
+    case RegState::Searching: return network::RegState::NOT_REG_MT_SEARCHING_OP_EM;
     case RegState::Home: return network::RegState::REG_HOME;
     case RegState::Roaming: return network::RegState::REG_ROAMING;
-    case RegState::Denied: return network::RegState::REG_DENIED;
+    case RegState::Denied: return network::RegState::REG_DENIED_EM;
     case RegState::EmergencyOnly: return network::RegState::NOT_REG_MT_NOT_SEARCHING_OP_EM;
-    default: return network::RegState::UNKNOWN;
+    default: return network::RegState::UNKNOWN_EM;
     }
+}
+
+// Whether the modem is camped or looking for a cell: the stock RIL keeps
+// the technology then, and clears it otherwise
+bool emergencyPossible(RegState state)
+{
+    return state == RegState::Searching || state == RegState::Denied ||
+           state == RegState::Unknown || state == RegState::EmergencyOnly;
 }
 
 void splitPlmn(const std::string &plmn, std::string &mcc, std::string &mnc)
@@ -154,7 +165,8 @@ network::RegStateResult regStateResult(const Registration &reg, const std::strin
 {
     network::RegStateResult result;
     result.regState = regState(reg.state);
-    result.rat = registered(reg.state) ? technology(reg.tech) : RadioTechnology::UNKNOWN;
+    result.rat = registered(reg.state) || emergencyPossible(reg.state) ? technology(reg.tech)
+                                                                      : RadioTechnology::UNKNOWN;
     // The modem reports the 3GPP reject cause, which the enum uses as values
     result.reasonForDenial = reg.state == RegState::Denied
                                      ? static_cast<network::RegistrationFailCause>(reg.rejectCause)

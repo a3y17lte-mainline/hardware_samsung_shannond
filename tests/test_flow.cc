@@ -59,6 +59,37 @@ TEST(boot_brings_sim_registration_and_identities)
     CHECK(s.fake.count(IPC_SEC_PIN_STATUS) == 0);
 }
 
+TEST(limited_service_is_a_refused_registration)
+{
+    // As the stock RIL reads it; the front end turns it into emergency-only
+    Stack s;
+    CHECK(s.booted());
+    s.fake.limitedService();
+    CHECK(s.loop.runUntil([&] { return s.network.voice().state == RegState::Denied; }));
+    CHECK(s.network.voice().tech == AccessTech::Gsm);
+    CHECK(!registered(s.network.voice().state));
+}
+
+TEST(sim_lock_states_as_the_stock_ril_reads_them)
+{
+    Stack s;
+    CHECK(s.booted());
+
+    s.fake.pinStatus(IPC_SEC_PIN_STATUS_LOCK_SC, IPC_SEC_FACILITY_LOCK_TYPE_SC_CARD_BLOCKED);
+    CHECK(s.loop.runUntil([&] { return s.sim.state() == SimState::PermanentlyBlocked; }));
+
+    s.fake.pinStatus(IPC_SEC_PIN_STATUS_LOCK_SC, IPC_SEC_FACILITY_LOCK_TYPE_SC_PUK_REQ);
+    CHECK(s.loop.runUntil([&] { return s.sim.state() == SimState::PukRequired; }));
+
+    s.fake.pinStatus(IPC_SEC_PIN_STATUS_LOCK_PP, 2);
+    CHECK(s.loop.runUntil([&] { return s.sim.state() == SimState::NetworkLocked; }));
+    CHECK(s.sim.lockStatus() == IPC_SEC_PIN_STATUS_LOCK_PP && s.sim.facilityLock() == 2);
+
+    s.fake.pinStatus(IPC_SEC_PIN_STATUS_CARD_NOT_PRESENT, 0);
+    CHECK(s.loop.runUntil([&] { return s.sim.state() == SimState::Absent; }));
+    CHECK(s.sim.apps().empty() && s.sim.imsi().empty());
+}
+
 TEST(mode_probe_keeps_the_accepted_modes)
 {
     Stack s;

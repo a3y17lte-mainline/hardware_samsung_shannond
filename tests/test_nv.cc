@@ -111,4 +111,11 @@ TEST(rfs_service_answers_reads_and_writes)
     fake.nvRead(kSize - 4, 8);
     CHECK(loop.runUntil([&] { return fake.rfsReceived.size() == 3; }));
     CHECK(fake.rfsReceived[2].data[0] == 0);
+
+    // A message longer than a FMT frame can be (NV data comes in big
+    // writes): read whole, then refused for its range
+    fake.nvWrite(0, Bytes(0x18000, 0x5a));
+    CHECK(loop.runUntil([&] { return fake.rfsReceived.size() == 4; }));
+    CHECK(fake.rfsReceived[3].data[0] == 0);
+    CHECK(nv.valid());
 }

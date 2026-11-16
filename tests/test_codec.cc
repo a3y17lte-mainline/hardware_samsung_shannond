@@ -76,6 +76,33 @@ TEST(codec_path_and_cla)
     CHECK(channelCla(0x80, 19) == 0xcf);
 }
 
+TEST(codec_call_fail_cause)
+{
+    // Sample points of the stock RIL's tables (GetReleaseCause)
+    CHECK(lastCallFailCause(0, 0x05) == 16);     // NORMAL
+    CHECK(lastCallFailCause(0, 0x06) == 17);     // BUSY
+    CHECK(lastCallFailCause(0, 0x08) == 19);     // NO_ANSWER_FROM_USER
+    CHECK(lastCallFailCause(0, 0x2f) == 0xffff); // ERROR_UNSPECIFIED
+    CHECK(lastCallFailCause(0, 0x14) == 34);     // NO_CIRCUIT_AVAIL
+    CHECK(lastCallFailCause(0, 0x99) == 16);     // anything else: NORMAL
+    // A cause type that decides by itself
+    CHECK(lastCallFailCause(12, 0x06) == 1002);  // NO_VALID_SIM
+    CHECK(lastCallFailCause(16, 0x05) == 1000);  // RADIO_OFF
+    CHECK(lastCallFailCause(7, 0x06) == 17);     // type 7: by the cause
+}
+
+TEST(codec_data_fail_cause)
+{
+    // ConvertDataFailCauseFromIpc: the modem's own codes
+    CHECK(dataCallFailCause(0x00) == 0x00);
+    CHECK(dataCallFailCause(0x02) == 0x24);  // REGULAR_DEACTIVATION
+    CHECK(dataCallFailCause(0x0c) == 0x22);
+    CHECK(dataCallFailCause(0x19) == 0x0c);
+    CHECK(dataCallFailCause(0x1d) == 0x6f);
+    CHECK(dataCallFailCause(0x3e) == -11);
+    CHECK(dataCallFailCause(0xee) == 0x0e);  // unknown
+}
+
 TEST(codec_aka)
 {
     Bytes challenge{16};
