@@ -65,7 +65,8 @@ RadioVoice::RadioVoice(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
         for (const Call &c : core->calls.list()) {
             voice::Call call;
             call.state = callState(c.state);
-            call.index = c.id;
+            // The modem counts calls from 0, the framework from 1
+            call.index = static_cast<int32_t>(c.id) + 1;
             call.toa = !c.number.empty() && c.number[0] == '+' ? 145 : 129;
             call.isMpty = c.multiparty;
             call.isMT = c.incoming;
