@@ -54,6 +54,8 @@ struct DataLinks {
     // call's addresses: nothing else on the system does that
     std::function<bool(DataCall &call)> up;
     std::function<void(unsigned int cid, const std::string &iface)> down;
+    // Removes the interfaces an earlier client left
+    std::function<void()> reset;
 
     static DataLinks wwan(const std::string &wwanDevice);
     static DataLinks none();  // name only, for tests
@@ -64,6 +66,9 @@ public:
     using Done = std::function<void(std::optional<DataCall>)>;
 
     Data(Modem &modem, DataLinks links);
+
+    // Forgets every call and removes the interfaces an earlier client left
+    void reset();
 
     // The default bearer's APN, sent before the first connection: the
     // modem re-registers when it gets it

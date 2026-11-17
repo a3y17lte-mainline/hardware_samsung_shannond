@@ -40,21 +40,33 @@ Sim::Sim(Modem &modem) : modem_(modem)
     });
 
     modem_.onMessage(IPC_SEC_SIM_ICCID, [this](const Message &m) {
-        // Length, then BCD with swapped nibbles, as on the card
+        // Length, then the number as on the card
         if (m.data.empty())
             return;
-        const size_t end = std::min<size_t>(m.data.size(), 1 + m.data[0]);
-        std::string iccid;
-        for (size_t i = 1; i < end; i++) {
-            const uint8_t lo = m.data[i] & 0x0f, hi = m.data[i] >> 4;
-            if (lo <= 9) iccid += char('0' + lo);
-            if (hi <= 9) iccid += char('0' + hi);
-        }
-        if (!iccid.empty()) {
-            iccid_ = iccid;
-            notify();
-        }
+        setIccid(m.data.data() + 1, std::min<size_t>(m.data.size() - 1, m.data[0]));
     });
+}
+
+// BCD with swapped nibbles, as in EF ICCID
+void Sim::setIccid(const uint8_t *data, size_t size)
+{
+    std::string iccid;
+    for (size_t i = 0; i < size; i++) {
+        const uint8_t lo = data[i] & 0x0f, hi = data[i] >> 4;
+        if (lo <= 9) iccid += char('0' + lo);
+        if (hi <= 9) iccid += char('0' + hi);
+    }
+    if (!iccid.empty()) {
+        iccid_ = iccid;
+        notify();
+    }
+}
+
+void Sim::query()
+{
+    queried_ = true;
+    // The answer goes the way of the modem's own status messages
+    modem_.request(IPC_SEC_PIN_STATUS, IPC_TYPE_GET);
 }
 
 void Sim::notify()
@@ -74,6 +86,14 @@ void Sim::setState(SimState state)
     if (state == SimState::Ready) {
         modem_.request(IPC_MISC_ME_IMSI, IPC_TYPE_GET);
         refreshApps();
+        // The modem announces the card's number only at its start: after
+        // a query, read it from the card (EF ICCID, 2FE2 under the MF)
+        if (queried_ && iccid_.empty())
+            io(0xb0, 0x2fe2, {0x3f00}, 0, 0, 10, {}, nullptr,
+               [this](std::optional<SimIoResult> r) {
+                   if (r && r->sw1 == 0x90)
+                       setIccid(r->data.data(), r->data.size());
+               });
     }
     notify();
 }

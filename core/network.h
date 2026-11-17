@@ -64,6 +64,12 @@ public:
     void onChanged(std::function<void()> callback) { changed_.push_back(std::move(callback)); }
     void onReady(std::function<void()> callback) { readyCallbacks_.push_back(std::move(callback)); }
 
+    // Whether the modem is running although it never announced itself (a
+    // client that starts after the modem did). If so, the stack counts as
+    // up and the radio is switched off, which ends whatever registration,
+    // data contexts and calls an earlier client left
+    void probeRunning(std::function<void(bool running)> done);
+
     void setRadioPower(bool on, std::function<void(bool ok)> done = {});
     // Asks for the modes in order and keeps the ones the modem accepts
     void probeModes(std::function<void(uint8_t modes)> done = {});

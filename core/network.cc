@@ -194,6 +194,22 @@ void Network::powerUp()
         callback();
 }
 
+void Network::probeRunning(std::function<void(bool)> done)
+{
+    ipc_misc_me_version_request_data version;
+    ipc_misc_me_version_setup(&version);
+    modem_.request(IPC_MISC_ME_VERSION, IPC_TYPE_GET, version, [this, done](const Result &r) {
+        const bool running = r.ok && !ready_;
+        if (running) {
+            modem_.log("the modem was already running");
+            powerUp();
+            setRadioPower(false);
+        }
+        if (done)
+            done(running);
+    }, std::chrono::seconds(2));
+}
+
 void Network::refresh()
 {
     for (uint8_t domain : {IPC_NET_SERVICE_DOMAIN_GSM, IPC_NET_SERVICE_DOMAIN_GPRS}) {

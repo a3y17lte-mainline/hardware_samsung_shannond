@@ -68,6 +68,11 @@ DataLinks DataLinks::wwan(const std::string &wwanDevice)
         return setLinkUp(iface, true);
     };
     links.down = [](unsigned int, const std::string &iface) { deleteLink(iface); };
+    links.reset = [] {
+        for (unsigned int cid = 1; cid <= kDataChannels; cid++)
+            if (linkExists(ifaceName(cid)))
+                deleteLink(ifaceName(cid));
+    };
     return links;
 }
 
@@ -232,6 +237,13 @@ void Data::ipConfiguration(const Message &message)
                call.pcscf4.size() + call.pcscf6.size());
     notify(call);
     complete(cid, true);
+}
+
+void Data::reset()
+{
+    calls_.clear();
+    if (links_.reset)
+        links_.reset();
 }
 
 void Data::callStatus(const Message &message)

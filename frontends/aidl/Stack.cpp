@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "frontends/aidl/Stack.h"
 
+#include "core/attach.h"
+
 #include <android-base/logging.h>
 #include <chrono>
 #include <cstdlib>
@@ -84,6 +86,9 @@ void Stack::run()
         for (auto &fn : readyCallbacks_)
             fn(*core_);
     });
+
+    // After a restart of this service the modem is already running
+    adoptRunningModem(loop_, core_->network, core_->sim, core_->sms, core_->data);
 
     LOG(INFO) << "modem link open on " << config_.ipcPort << " + " << config_.rfsPort;
     loop_.run();

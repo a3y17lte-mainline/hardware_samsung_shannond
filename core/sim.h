@@ -74,6 +74,10 @@ public:
 
     // READ BINARY, READ RECORD, GET RESPONSE, ... on a file, in the USIM or,
     // with app, in that application (the ISIM)
+    // Asks the modem for the card's state: for a start without the
+    // modem's own start-up messages
+    void query();
+
     void io(uint8_t command, uint16_t fileId, const std::vector<uint16_t> &path, uint8_t p1,
             uint8_t p2, uint8_t p3, const Bytes &data, const SimApp *app,
             std::function<void(std::optional<SimIoResult>)> done);
@@ -91,6 +95,7 @@ public:
 
 private:
     void pinStatus(const Message &message);
+    void setIccid(const uint8_t *data, size_t size);
     void setState(SimState state);
     void notify();
 
@@ -98,6 +103,7 @@ private:
     SimState state_ = SimState::Unknown;
     std::string imsi_;
     std::string iccid_;
+    bool queried_ = false;
     std::vector<SimApp> apps_;
     uint8_t lockStatus_ = 0;
     uint8_t facilityLock_ = 0;

@@ -21,6 +21,12 @@ public:
 
     explicit Sms(Modem &modem);
 
+    // For a start without the modem's "SMS ready" message
+    void adopt()
+    {
+        if (!ready_)
+            deviceReady();
+    }
     bool ready() const { return ready_; }
     const Bytes &smsc() const { return smsc_; }
 

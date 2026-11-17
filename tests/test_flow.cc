@@ -2,6 +2,7 @@
 //
 // The whole daemon core against the synthetic modem: boot, SIM, LTE
 // registration, data with P-CSCF, SMS both ways, calls both ways, a crash.
+#include "core/attach.h"
 #include "core/call.h"
 #include "core/data.h"
 #include "core/network.h"
@@ -59,6 +60,32 @@ TEST(boot_brings_sim_registration_and_identities)
     CHECK(s.fake.count(IPC_NET_SERVICE_DOMAIN_CONFIG) == 1);
     // No PIN was ever sent
     CHECK(s.fake.count(IPC_SEC_PIN_STATUS) == 0);
+}
+
+TEST(a_running_modem_is_taken_over)
+{
+    // No start-up messages: the modem was started by an earlier client
+    Stack s;
+    adoptRunningModem(s.loop, s.network, s.sim, s.sms, s.data, std::chrono::milliseconds(20));
+    CHECK(s.loop.runUntil([&] {
+        return s.network.modemReady() && s.sim.state() == SimState::Ready &&
+               !s.sim.imsi().empty() && s.sms.ready() && !s.network.imei().empty();
+    }));
+    // The radio was switched off, and the card's number read from the card
+    CHECK(s.loop.runUntil([&] {
+        return s.fake.count(IPC_PWR_PHONE_STATE) == 1 && s.fake.count(IPC_SEC_RSIM_ACCESS) == 1;
+    }));
+}
+
+TEST(a_modem_that_just_started_is_not_probed)
+{
+    Stack s;
+    adoptRunningModem(s.loop, s.network, s.sim, s.sms, s.data, std::chrono::milliseconds(20));
+    CHECK(s.booted());
+    s.loop.runUntil([] { return false; }, std::chrono::milliseconds(60));
+    // Only the version request of the normal start, and the radio untouched
+    CHECK(s.fake.count(IPC_MISC_ME_VERSION) == 1 && s.fake.count(IPC_PWR_PHONE_STATE) == 0);
+    CHECK(s.fake.count(IPC_SEC_RSIM_ACCESS) == 0);
 }
 
 TEST(lte_signal_as_the_stock_ril_reads_it)

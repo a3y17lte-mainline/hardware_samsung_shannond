@@ -240,6 +240,19 @@ void FakeModem::handle(const Message &r)
         respond(r, toBytes(sn));
         return;
     }
+    case IPC_MISC_ME_VERSION:
+        respond(r, Bytes(sizeof(ipc_misc_me_version_response_data), 'v'));
+        return;
+    case IPC_SEC_PIN_STATUS: {
+        if (r.type != IPC_TYPE_GET) {
+            ack(r);
+            return;
+        }
+        ipc_sec_pin_status_response_data pin{};
+        pin.status = IPC_SEC_PIN_STATUS_INIT_COMPLETE;
+        respond(r, toBytes(pin));
+        return;
+    }
     case IPC_MISC_ME_IMSI: {
         Bytes data{static_cast<uint8_t>(sizeof(kImsi) - 1)};
         data.insert(data.end(), kImsi, kImsi + sizeof(kImsi) - 1);

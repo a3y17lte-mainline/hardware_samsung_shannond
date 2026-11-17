@@ -36,7 +36,8 @@ add_library(shannond_core STATIC
     core/network.cc
     core/data.cc
     core/sms.cc
-    core/call.cc)
+    core/call.cc
+    core/attach.cc)
 target_include_directories(shannond_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(shannond_core PRIVATE -Wall -Wextra -Werror=return-type)
 target_link_libraries(shannond_core PUBLIC samsung-ipc)
