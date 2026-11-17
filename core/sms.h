@@ -97,6 +97,7 @@ private:
     struct Pending {
         uint8_t network;
         uint8_t id;
+        std::chrono::steady_clock::time_point at;
     };
 
     void deviceReady();

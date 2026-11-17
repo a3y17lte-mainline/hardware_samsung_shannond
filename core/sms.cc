@@ -21,6 +21,8 @@ constexpr uint16_t kNormalChannels = 1000;
 constexpr uint16_t kWarningFirst = 0x1100;
 constexpr uint16_t kWarningLast = 0x18ff;
 constexpr size_t kMaxListedChannels = IPC_SMS_CBS_LIST_MAX;
+// How long the framework's acknowledgement of a message is waited for
+constexpr std::chrono::seconds kAckWait{60};
 
 using Channels = std::bitset<0x10000>;
 
@@ -134,7 +136,7 @@ void Sms::received(const Message &message)
 
     // The stock RIL acknowledges once the framework has the message, with
     // the network byte the message came with
-    const Pending pending{header->msg_type, header->id};
+    const Pending pending{header->msg_type, header->id, std::chrono::steady_clock::now()};
     const bool statusReport = header->type == IPC_SMS_TYPE_STATUS_REPORT;
     const Bytes pdu(message.data.begin() + sizeof(*header),
                     message.data.begin() + sizeof(*header) + header->length);
@@ -143,6 +145,8 @@ void Sms::received(const Message &message)
         sendReport(pending, true, false);
         return;
     }
+    // Delivered again: the first copy was never acknowledged
+    std::erase_if(unacknowledged_, [&](const Pending &p) { return p.id == pending.id; });
     unacknowledged_.push_back(pending);
     for (auto &callback : incoming_)
         callback(pdu, statusReport);
@@ -150,6 +154,14 @@ void Sms::received(const Message &message)
 
 void Sms::acknowledge(bool success, bool memoryFull)
 {
+    // A message the framework never answered for (it restarted, or lost
+    // the indication) must not shift every later acknowledgement by one:
+    // the network gave up on it long ago and sends it again
+    const auto now = std::chrono::steady_clock::now();
+    while (unacknowledged_.size() > 1 && now - unacknowledged_.front().at > kAckWait) {
+        modem_.log("SMS %u was never acknowledged, dropped", unacknowledged_.front().id);
+        unacknowledged_.pop_front();
+    }
     if (unacknowledged_.empty()) {
         modem_.log("SMS acknowledgement without a message");
         return;
