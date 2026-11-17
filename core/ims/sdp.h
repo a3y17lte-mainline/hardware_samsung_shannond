@@ -53,6 +53,10 @@ struct Sdp {
     unsigned bandwidthAs = 0, bandwidthRs = 0, bandwidthRr = 0;
     std::optional<uint16_t> rtcpPort;
     Preconditions qos;
+    // Other streams of an offer, before and after the audio stream: kept
+    // as rejected m= lines (port 0), since an answer has one per offered
+    // stream (RFC 3264 6)
+    std::vector<std::string> rejectedBefore, rejectedAfter;
 
     std::string str() const;
     static std::optional<Sdp> parse(const std::string &text);

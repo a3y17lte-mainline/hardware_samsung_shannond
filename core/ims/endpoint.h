@@ -42,6 +42,13 @@ struct SipTimers {
     std::chrono::milliseconds t1{500};
     std::chrono::milliseconds t2{4000};
     std::chrono::milliseconds t4{5000};
+    // The first retransmission (timers A, E, G) and the transaction timeout
+    // (B, F, H, J) where a profile sets them apart from T1 (24.229 table
+    // 7.7.1); 0: T1 and 64*T1
+    std::chrono::milliseconds retransmit{0};
+    std::chrono::milliseconds timeout{0};
+    std::chrono::milliseconds first() const { return retransmit.count() ? retransmit : t1; }
+    std::chrono::milliseconds limit() const { return timeout.count() ? timeout : t1 * 64; }
 };
 
 class SipEndpoint {
@@ -74,6 +81,8 @@ public:
     void closeProtected();
     void closeAll();
     bool isProtected() const { return current_ != nullptr; }
+    // A request of ours waits for its answer
+    bool busy() const { return !clients_.empty(); }
 
     const std::string &localAddress() const { return local_; }
     // Our port for Via and Contact on a flow
@@ -121,6 +130,7 @@ private:
     void timeout(const std::string &branch);
     void finish(const std::string &branch);
     void sendAck(const ClientTransaction &t, const SipMessage &response);
+    void resendFinal(const std::string &key);
 
     EventLoop &loop_;
     ImsNetwork &network_;
@@ -129,6 +139,14 @@ private:
     RequestHandler requestHandler_;
     std::function<void()> activity_;
     std::function<void(const SipMessage &)> strayHandler_;
+    // ACKs of failed INVITEs over UDP, sent again for a repeated answer
+    // (RFC 3261 17.1.1.2, timer D)
+    struct Acked {
+        std::string data;
+        Route route;
+        EventLoop::TimerId expire = 0;
+    };
+    std::map<std::string, Acked> acked_;
     std::string local_;
     int plainUdp_ = -1;
     int plainTcp_ = -1;

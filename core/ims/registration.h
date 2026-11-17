@@ -80,6 +80,8 @@ public:
     // P-Access-Network-Info, User-Agent. Requests inside a dialog follow
     // the dialog's route set instead (withRoute false).
     void decorate(SipMessage &request, bool withRoute = true) const;
+    // P-Access-Network-Info for an answer of ours (24.229 5.1.2A.2); may be empty
+    std::string accessNetworkInfo() const { return params_.accessNetworkInfo ? params_.accessNetworkInfo() : std::string(); }
 
     // A request from the network: true if it was the registration's (the
     // reg event NOTIFY)
@@ -100,6 +102,7 @@ private:
     void challenged(const SipMessage &response, bool protectedFlow);
     void akaAnswered(AkaAnswer answer, unsigned expires);
     void registered(const SipMessage &response);
+    void deregistered(const std::string &why);
     void failed(const std::string &why, bool nextPcscf, std::optional<std::chrono::seconds> retryAfter = {});
     void refresh();
     void subscribe();
@@ -138,13 +141,17 @@ private:
     unsigned nc_ = 0;
     std::optional<SecurityMechanism> chosen_;
     std::optional<Bytes> auts_;
-    bool akaFailed_ = false;
+    bool akaFailed_ = false;  // the SIM refused the challenge: answered with an empty response
+    bool deregChallenged_ = false;
     std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
 
     // Reg event subscription
     std::string subCallId_;
     std::string subFromTag_;
     std::string subToTag_;
+    std::string subTarget_;               // the notifier's Contact
+    std::vector<std::string> subRoute_;  // the dialog's route set
+    unsigned subFailures_ = 0;
     uint32_t subCseq_ = 0;
 
     AlarmTimer retryTimer_;  // wakes a sleeping phone, as the refresh does

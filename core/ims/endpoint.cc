@@ -127,6 +127,11 @@ struct SipEndpoint::ServerTransaction {
     Source source;
     std::string lastResponse;
     EventLoop::TimerId expire = 0;
+    // An INVITE's failure answer over UDP, sent again until its ACK
+    // (RFC 3261 17.2.1, timer G)
+    Route resendRoute;
+    std::chrono::milliseconds resendInterval{};
+    EventLoop::TimerId resend = 0;
 };
 
 SipEndpoint::SipEndpoint(EventLoop &loop, ImsNetwork &network, SipTimers timers)
@@ -232,9 +237,14 @@ void SipEndpoint::closeAll()
         loop_.cancel(t->timeoutTimer);
     }
     clients_.clear();
-    for (auto &[key, t] : servers_)
+    for (auto &[key, t] : servers_) {
         loop_.cancel(t->expire);
+        loop_.cancel(t->resend);
+    }
     servers_.clear();
+    for (auto &[key, a] : acked_)
+        loop_.cancel(a.expire);
+    acked_.clear();
 }
 
 uint16_t SipEndpoint::port(Flow flow) const
@@ -258,12 +268,14 @@ int SipEndpoint::udpFor(Flow flow) const
 
 void SipEndpoint::watchUdp(int fd, Flow flow)
 {
-    loop_.watch(fd, EPOLLIN, [this, fd, flow](uint32_t) { readUdp(fd, flow); });
+    // EPOLLWAKEUP: a message that arrives keeps a suspending system awake
+    // until it is read (needs CAP_BLOCK_SUSPEND, else no effect)
+    loop_.watch(fd, EPOLLIN | EPOLLWAKEUP, [this, fd, flow](uint32_t) { readUdp(fd, flow); });
 }
 
 void SipEndpoint::watchListener(int fd, Flow flow)
 {
-    loop_.watch(fd, EPOLLIN, [this, fd, flow](uint32_t) {
+    loop_.watch(fd, EPOLLIN | EPOLLWAKEUP, [this, fd, flow](uint32_t) {
         sockaddr_storage ss{};
         socklen_t length = sizeof(ss);
         int c = accept4(fd, reinterpret_cast<sockaddr *>(&ss), &length, SOCK_NONBLOCK | SOCK_CLOEXEC);
@@ -280,7 +292,7 @@ void SipEndpoint::watchListener(int fd, Flow flow)
         conn->peer = *peer;
         conn->connected = true;
         connections_[c] = std::move(conn);
-        loop_.watch(c, EPOLLIN, [this, c](uint32_t events) {
+        loop_.watch(c, EPOLLIN | EPOLLWAKEUP, [this, c](uint32_t events) {
             if (events & (EPOLLIN | EPOLLHUP | EPOLLERR))
                 readTcp(c);
             else if (events & EPOLLOUT)
@@ -454,7 +466,7 @@ SipEndpoint::Connection *SipEndpoint::connect(const Route &route)
     conn->peer = route.to;
     Connection *c = conn.get();
     connections_[fd] = std::move(conn);
-    loop_.watch(fd, EPOLLOUT | EPOLLIN, [this, fd](uint32_t events) {
+    loop_.watch(fd, EPOLLOUT | EPOLLIN | EPOLLWAKEUP, [this, fd](uint32_t events) {
         if (events & EPOLLOUT)
             writeTcp(fd);
         if (events & (EPOLLIN | EPOLLHUP | EPOLLERR))
@@ -532,7 +544,7 @@ std::string SipEndpoint::send(SipMessage request, const Route &route, ResponseHa
     t->request = request;
     t->data = request.serialize();
     t->handler = std::move(handler);
-    t->interval = timers_.t1;
+    t->interval = timers_.first();
     log("SIP out: " + describe(request) + " to " + route.to.str() + (t->udp ? " UDP" : " TCP"));
 
     const std::string key = t->key;
@@ -552,8 +564,10 @@ std::string SipEndpoint::send(SipMessage request, const Route &route, ResponseHa
     } else {
         t->retransmitTimer = loop_.after(t->interval, [this, key]() { retransmit(key); });
     }
-    t->timeoutTimer = loop_.after(timers_.t1 * 64, [this, key]() { timeout(key); });
+    t->timeoutTimer = loop_.after(timers_.limit(), [this, key]() { timeout(key); });
     clients_[key] = std::move(t);
+    if (activity_)
+        activity_();  // the transaction is open now
     return branch;
 }
 
@@ -606,7 +620,11 @@ bool SipEndpoint::cancel(const std::string &branch, ResponseHandler handler)
     auto it = clients_.find(keyOf(branch, "INVITE"));
     if (it == clients_.end())
         return false;
-    const ClientTransaction &t = *it->second;
+    ClientTransaction &t = *it->second;
+    // RFC 3261 9.1: without a final answer the transaction ends after 64*T1
+    const std::string key = t.key;
+    loop_.cancel(t.timeoutTimer);
+    t.timeoutTimer = loop_.after(timers_.limit(), [this, key]() { timeout(key); });
     // Same Request-URI, Call-ID, To, From, top Via and Route; the CSeq
     // number with method CANCEL
     SipMessage c = SipMessage::request("CANCEL", t.request.requestUri());
@@ -637,7 +655,16 @@ void SipEndpoint::sendAck(const ClientTransaction &t, const SipMessage &response
     if (auto cseq = t.request.cseq())
         ack.add("CSeq", std::to_string(cseq->first) + " ACK");
     ack.add("Max-Forwards", "70");
-    transmit(ack.serialize(), t.route, t.connection);
+    const std::string data = ack.serialize();
+    transmit(data, t.route, t.connection);
+    if (t.udp) {
+        const std::string key = t.key;
+        Acked &a = acked_[key];
+        loop_.cancel(a.expire);
+        a.data = data;
+        a.route = t.route;
+        a.expire = loop_.after(std::chrono::seconds(32), [this, key]() { acked_.erase(key); });
+    }
 }
 
 bool SipEndpoint::sendStateless(const SipMessage &message, const Route &route)
@@ -671,6 +698,10 @@ void SipEndpoint::handleResponse(SipMessage response)
     const std::string key = keyOf(*branch, cseq->second);
     auto it = clients_.find(key);
     if (it == clients_.end()) {
+        if (auto a = acked_.find(key); a != acked_.end() && response.status() >= 300) {
+            transmit(a->second.data, a->second.route);
+            return;
+        }
         // A retransmitted 2xx of an INVITE: the call layer ACKs it again
         if (cseq->second == "INVITE" && response.status() >= 200 && response.status() < 300 &&
             strayHandler_)
@@ -719,8 +750,11 @@ void SipEndpoint::handleRequest(SipMessage request, const Source &source)
         // The ACK of a non-2xx final answer ends that INVITE's server
         // transaction; an ACK for a 2xx has its own branch and goes up
         auto it = servers_.find(keyOf(*branch, "INVITE"));
-        if (it != servers_.end())
+        if (it != servers_.end()) {
+            loop_.cancel(it->second->resend);
+            it->second->resend = 0;
             return;
+        }
         if (requestHandler_)
             requestHandler_(request, source);
         return;
@@ -733,6 +767,8 @@ void SipEndpoint::handleRequest(SipMessage request, const Source &source)
             Route route;
             route.flow = source.flow;
             route.to = source.from;
+            if (source.connection < 0)
+                route = udpResponseRoute(source, request);
             transmit(it->second->lastResponse, route, source.connection);
         }
         return;
@@ -741,7 +777,7 @@ void SipEndpoint::handleRequest(SipMessage request, const Source &source)
     t->source = source;
     // An INVITE's lives until its final answer (then 64*T1 more, see
     // respond()); the limit only guards against a call layer that never answers
-    t->expire = loop_.after(method == "INVITE" ? std::chrono::milliseconds(std::chrono::minutes(5)) : timers_.t1 * 64,
+    t->expire = loop_.after(method == "INVITE" ? std::chrono::milliseconds(std::chrono::minutes(5)) : timers_.limit(),
                             [this, key]() {
         auto it = servers_.find(key);
         if (it != servers_.end())
@@ -793,6 +829,18 @@ Route SipEndpoint::udpResponseRoute(const Source &source, const SipMessage &requ
     return route;
 }
 
+void SipEndpoint::resendFinal(const std::string &key)
+{
+    auto it = servers_.find(key);
+    if (it == servers_.end())
+        return;
+    ServerTransaction &t = *it->second;
+    transmit(t.lastResponse, t.resendRoute);
+    // Doubling up to T2; the transaction's end (64*T1) stops it
+    t.resendInterval = std::min(t.resendInterval * 2, timers_.t2);
+    t.resend = loop_.after(t.resendInterval, [this, key]() { resendFinal(key); });
+}
+
 void SipEndpoint::respond(const Source &source, const SipMessage &request, const SipMessage &response)
 {
     auto branch = request.branch();
@@ -804,11 +852,22 @@ void SipEndpoint::respond(const Source &source, const SipMessage &request, const
             it->second->lastResponse = data;
             if (request.method() == "INVITE" && response.status() >= 200) {
                 loop_.cancel(it->second->expire);
-                it->second->expire = loop_.after(timers_.t1 * 64, [this, key]() {
+                it->second->expire = loop_.after(timers_.limit(), [this, key]() {
                     auto it = servers_.find(key);
-                    if (it != servers_.end())
+                    if (it != servers_.end()) {
+                        loop_.cancel(it->second->resend);
                         servers_.erase(it);
+                    }
                 });
+                // A 2xx is the call layer's to repeat; over TCP nothing is
+                loop_.cancel(it->second->resend);
+                it->second->resend = 0;
+                if (response.status() >= 300 && source.connection < 0) {
+                    it->second->resendRoute = udpResponseRoute(source, request);
+                    it->second->resendInterval = timers_.first();
+                    it->second->resend =
+                        loop_.after(it->second->resendInterval, [this, key]() { resendFinal(key); });
+                }
             }
         }
     }
@@ -819,7 +878,7 @@ void SipEndpoint::respond(const Source &source, const SipMessage &request, const
         route = udpResponseRoute(source, request);
     log("SIP out: " + describe(response) + " to " + route.to.str());
     if (!transmit(data, route, source.connection) && source.connection >= 0)
-        transmit(data, route);  // the connection is gone: over UDP
+        transmit(data, udpResponseRoute(source, request));  // the connection is gone: over UDP
 }
 
 }  // namespace shannond::ims

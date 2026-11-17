@@ -131,4 +131,7 @@ std::string randomHex(size_t n);
 // A new Via branch with the RFC 3261 magic cookie
 std::string newBranch();
 
+// The methods we take, in every Allow header (REGISTER, calls, OPTIONS answers)
+inline constexpr const char *kAllow = "INVITE, ACK, CANCEL, BYE, UPDATE, PRACK, NOTIFY, OPTIONS, INFO";
+
 }  // namespace shannond::ims

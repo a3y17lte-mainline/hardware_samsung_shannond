@@ -13,7 +13,6 @@ namespace shannond::ims {
 namespace {
 
 constexpr const char *kMmtel = "\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\"";
-constexpr const char *kAllow = "INVITE, ACK, CANCEL, BYE, UPDATE, PRACK, NOTIFY, OPTIONS, INFO, REFER";
 
 std::optional<unsigned> number(std::string_view s)
 {
@@ -229,6 +228,7 @@ std::string ImsRegistration::authorization(const std::string &method, const std:
     if (!auts_)
         c.password = res_;
     c.auts = auts_;
+    c.emptyResponse = akaFailed_ && !auts_;
     return digestAuthorization(*challenge_, c, randomHex(16), ++nc_);
 }
 
@@ -291,12 +291,15 @@ void ImsRegistration::registerAnswered(const SipMessage *response, bool protecte
     if (response && response->status() < 200)
         return;
     pendingBranch_.clear();
-    if (expires == 0) {  // deregistration: whatever the answer, it is over
-        endpoint_.closeProtected();
-        clearSecurity();
-        setState(RegistrationState::Idle, response ? "deregistered" : "deregistered without an answer");
-        if (auto done = std::move(stopped_))
-            done();
+    if (expires == 0) {
+        // A deregistration the network challenges is answered once (else
+        // the binding stays until it expires); any other answer ends it
+        if (response && response->status() == 401 && !deregChallenged_) {
+            deregChallenged_ = true;
+            challenged(*response, protectedFlow);
+            return;
+        }
+        deregistered(response ? "deregistered" : "deregistered without an answer");
         return;
     }
     if (state_ == RegistrationState::Idle)
@@ -333,8 +336,19 @@ void ImsRegistration::registerAnswered(const SipMessage *response, bool protecte
     failed(why, true, retryAfter);
 }
 
+void ImsRegistration::deregistered(const std::string &why)
+{
+    pendingBranch_.clear();
+    endpoint_.closeProtected();
+    clearSecurity();
+    setState(RegistrationState::Idle, why);
+    if (auto done = std::move(stopped_))
+        done();
+}
+
 void ImsRegistration::challenged(const SipMessage &response, bool protectedFlow)
 {
+    const bool leaving = state_ == RegistrationState::Deregistering;
     std::optional<DigestChallenge> challenge;
     for (const auto &value : response.headers("WWW-Authenticate"))
         if (auto c = DigestChallenge::parse(value); c && c->isAka())
@@ -361,7 +375,9 @@ void ImsRegistration::challenged(const SipMessage &response, bool protectedFlow)
             failed("no usable Security-Server", true);
             return;
         }
-        if (!reservedUc_ && !reserveSpis()) {  // a challenge to a request without an offer
+        // A challenge to a request without an offer (a deregistration is
+        // answered over the associations in use)
+        if (!reservedUc_ && !leaving && !reserveSpis()) {
             failed("no SPIs", false);
             return;
         }
@@ -373,7 +389,7 @@ void ImsRegistration::challenged(const SipMessage &response, bool protectedFlow)
     }
     (void)protectedFlow;
     auto alive = alive_;
-    const unsigned expires = expires_;
+    const unsigned expires = leaving ? 0 : expires_;
     aka_(vector->rand, vector->autn, [this, alive, expires](AkaAnswer answer) {
         if (!*alive)
             return;
@@ -388,8 +404,17 @@ void ImsRegistration::akaAnswered(AkaAnswer answer, unsigned expires)
     switch (answer.kind) {
     case AkaAnswer::Kind::Failed:
         // The network failed the SIM's check (or the SIM did not answer):
-        // nothing to send it
-        failed("the SIM refused the network's challenge", true);
+        // told with an empty response and no AUTS (24.229 5.1.1.5.3), once;
+        // the network challenges again or refuses
+        if (akaFailed_) {
+            failed("the SIM refused the network's challenge", true);
+            return;
+        }
+        log("the SIM refused the network's challenge");
+        akaFailed_ = true;
+        auts_.reset();
+        res_.clear();
+        sendRegister(endpoint_.isProtected(), expires);
         return;
     case AkaAnswer::Kind::Resync:
         log("SIM asks to resynchronise");
@@ -401,6 +426,7 @@ void ImsRegistration::akaAnswered(AkaAnswer answer, unsigned expires)
         break;
     }
     auts_.reset();
+    akaFailed_ = false;
     res_ = answer.res;
     if (!params_.profile.ipsec) {
         sendRegister(false, expires);
@@ -516,8 +542,11 @@ void ImsRegistration::registered(const SipMessage &response)
     });
     const bool first = state_ != RegistrationState::Registered;
     setState(RegistrationState::Registered, "for " + std::to_string(expires) + " s");
-    if (first && params_.profile.subscribeRegEvent)
+    if (first && params_.profile.subscribeRegEvent) {
+        subToTag_.clear();
+        subFailures_ = 0;
         subscribe();
+    }
 }
 
 void ImsRegistration::refresh()
@@ -532,6 +561,10 @@ void ImsRegistration::refresh()
 
 void ImsRegistration::failed(const std::string &why, bool nextPcscf, std::optional<std::chrono::seconds> retryAfter)
 {
+    if (state_ == RegistrationState::Deregistering) {
+        deregistered("deregistered (" + why + ")");
+        return;
+    }
     pendingBranch_.clear();
     refreshTimer_.cancel();
     subTimer_.cancel();
@@ -570,6 +603,7 @@ void ImsRegistration::stop(std::function<void()> done)
     if (state_ == RegistrationState::Registered && sas_) {
         stopped_ = std::move(done);
         releaseReserved();
+        deregChallenged_ = false;
         setState(RegistrationState::Deregistering, "asked to");
         if (!pendingBranch_.empty())
             endpoint_.forget(pendingBranch_);
@@ -592,6 +626,7 @@ void ImsRegistration::abort()
     endpoint_.closeProtected();
     clearSecurity();
     subCallId_.clear();
+    subToTag_.clear();
     if (state_ != RegistrationState::Idle)
         setState(RegistrationState::Idle, "stopped");
 }
@@ -632,15 +667,24 @@ void ImsRegistration::decorate(SipMessage &request, bool withRoute) const
 void ImsRegistration::subscribe()
 {
     const std::string &impu = info_.defaultImpu;
-    subCallId_ = randomHex(24);
-    subFromTag_ = randomHex(10);
-    subToTag_.clear();
-    subCseq_ = 0;
-    SipMessage s = SipMessage::request("SUBSCRIBE", impu);
+    // A refresh stays in the subscription's dialog (RFC 6665 4.1.2.2)
+    const bool again = !subCallId_.empty() && !subToTag_.empty();
+    if (!again) {
+        subCallId_ = randomHex(24);
+        subFromTag_ = randomHex(10);
+        subToTag_.clear();
+        subTarget_.clear();
+        subRoute_.clear();
+        subCseq_ = 0;
+    }
+    SipMessage s = SipMessage::request("SUBSCRIBE", again && !subTarget_.empty() ? subTarget_ : impu);
     s.add("Max-Forwards", "70");
-    decorate(s);
+    if (again)
+        for (const auto &r : subRoute_)
+            s.add("Route", r);
+    decorate(s, !again);
     s.add("From", "<" + impu + ">;tag=" + subFromTag_);
-    s.add("To", "<" + impu + ">");
+    s.add("To", "<" + impu + ">" + (again ? ";tag=" + subToTag_ : ""));
     s.add("Call-ID", subCallId_);
     s.add("CSeq", std::to_string(++subCseq_) + " SUBSCRIBE");
     s.add("Contact", "<" + contactUri() + ">");
@@ -649,7 +693,7 @@ void ImsRegistration::subscribe()
     s.add("Expires", std::to_string(expires_));
     s.add("P-Preferred-Identity", "<" + impu + ">");
     auto alive = alive_;
-    endpoint_.send(std::move(s), route(), [this, alive](const SipMessage *m) {
+    endpoint_.send(std::move(s), route(), [this, alive, again](const SipMessage *m) {
         if (!*alive || (m && m->status() < 200))
             return;
         if (!m || m->status() >= 300) {
@@ -658,11 +702,28 @@ void ImsRegistration::subscribe()
                 if (auto warning = m->header("Warning"))
                     why += " (" + *warning + ")";
             log("reg event subscription failed" + why);
+            // A new subscription, after a wait as for a failed registration
+            subToTag_.clear();
+            if (state_ != RegistrationState::Registered)
+                return;
+            auto alive = alive_;
+            subTimer_.start(backoff(++subFailures_), [this, alive]() {
+                if (*alive && state_ == RegistrationState::Registered)
+                    subscribe();
+            });
             return;
         }
+        subFailures_ = 0;
         if (auto to = m->header("To"))
             if (auto n = NameAddr::parse(*to))
                 subToTag_ = n->params.get("tag").value_or("");
+        if (!again) {
+            if (auto contact = m->header("Contact"))
+                if (auto n = NameAddr::parse(*contact))
+                    subTarget_ = n->uri;
+            auto rr = m->headers("Record-Route");
+            subRoute_.assign(rr.rbegin(), rr.rend());
+        }
         // 24.229 5.1.1.3: subscribed again 600 s before the end, or half
         // way for a short one
         unsigned expires = expires_;
@@ -701,6 +762,7 @@ bool ImsRegistration::handleRequest(const SipMessage &request, const Source &sou
         log("reg event subscription ended by the network (" + subReason + ")");
     if (iequals(trim(std::string_view(subState).substr(0, subState.find(';'))), "terminated") &&
         state_ == RegistrationState::Registered && subAgain) {
+        subToTag_.clear();  // that dialog is over
         auto alive = alive_;
         subTimer_.start(std::chrono::seconds(*subAgain), [this, alive]() {
             if (*alive && state_ == RegistrationState::Registered)
@@ -723,14 +785,29 @@ bool ImsRegistration::handleRequest(const SipMessage &request, const Source &sou
             log("the network shortened the registration");
             refresh();
         }
-        if ((aor == params_.identity.impu() || aor == info_.defaultImpu) &&
-            xmlAttribute(body, pos, "state") == "terminated" &&
+        // Our contact alone ended while the registration (other devices)
+        // goes on
+        bool contactEnded = false, contactRejected = false;
+        for (size_t c = element.find("<contact"); c != std::string::npos; c = element.find("<contact", c + 1)) {
+            const size_t open = element.find("<uri>", c), close = element.find("</uri>", c);
+            if (xmlAttribute(element, c, "state") != "terminated" || open == std::string::npos ||
+                close == std::string::npos || close < open)
+                continue;
+            auto ours = Uri::parse(contactUri()), theirs = Uri::parse(element.substr(open + 5, close - open - 5));
+            if (ours && theirs && sameHost(ours->host, theirs->host) && ours->port == theirs->port) {
+                contactEnded = true;
+                contactRejected = xmlAttribute(element, c, "event") == "rejected";
+            }
+        }
+        const bool allEnded = xmlAttribute(body, pos, "state") == "terminated";
+        if ((aor == params_.identity.impu() || aor == info_.defaultImpu) && (allEnded || contactEnded) &&
             state_ == RegistrationState::Registered) {
             // 24.229 5.1.1.7: deactivated asks for a new registration;
             // rejected does not, and a network that keeps ending what it
             // just gave is not asked every second either: those wait as
             // failed attempts do
-            const bool rejected = element.find("event=\"rejected\"") != std::string::npos;
+            const bool rejected = allEnded ? element.find("event=\"rejected\"") != std::string::npos
+                                           : contactRejected;
             const auto now = std::chrono::steady_clock::now();
             if (lastEnded_ && now - *lastEnded_ < std::chrono::seconds(2 * params_.profile.retryMax))
                 ended_++;

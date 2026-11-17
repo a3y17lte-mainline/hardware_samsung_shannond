@@ -12,7 +12,6 @@ namespace {
 
 constexpr const char *kMmtelService = "urn:urn-7:3gpp-service.ims.icsi.mmtel";
 constexpr const char *kMmtelTag = "+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\"";
-constexpr const char *kAllow = "INVITE, ACK, CANCEL, BYE, UPDATE, PRACK, OPTIONS, INFO";
 // How long the call audio stays up after SRVCC until the CS call shows up
 constexpr std::chrono::seconds kHandoverAudioHold{3};
 
@@ -115,6 +114,14 @@ const Codec *telephoneEventAt(const Sdp &sdp, unsigned rate)
     return any;
 }
 
+// RFC 3261 14.1: after a 491 the owner of the Call-ID waits 2.1-4 s, the
+// other side up to 2 s
+std::chrono::milliseconds glareDelay(bool owner)
+{
+    static std::mt19937 random{std::random_device{}()};
+    return std::chrono::milliseconds(owner ? 2100 + random() % 1900 : random() % 2000);
+}
+
 uint64_t sdpSessionId()
 {
     static std::mt19937_64 random{std::random_device{}()};
@@ -191,6 +198,7 @@ struct ImsCalls::Session {
     bool preconditions = false;
     bool remoteResources = false;
     bool qosUpdateSent = false;
+    bool offerOut = false;  // our UPDATE with an offer waits for its answer
     bool localHold = false;
     bool reinvitePending = false;
 
@@ -326,9 +334,19 @@ void ImsCalls::end(Session &s, int status, const std::string &reason, bool retry
         for (auto &c : changed_)
             c(s.info);
     updateAudio();
-    // Kept a while for late answers (a 2xx after our CANCEL needs ACK + BYE)
     const int id = s.info.id;
     auto alive = alive_;
+    if (!any() && voiceBearer_) {
+        // The bearer was this call's: a call placed right now waits for the
+        // release (or, on a bearer the network keeps, for this to pass)
+        const auto wait = std::chrono::seconds(3);
+        bearerStaleUntil_ = std::chrono::steady_clock::now() + wait;
+        loop_.after(wait + std::chrono::milliseconds(10), [this, alive]() {
+            if (*alive)
+                recheckBearer();
+        });
+    }
+    // Kept a while for late answers (a 2xx after our CANCEL needs ACK + BYE)
     loop_.after(std::chrono::seconds(32), [this, alive, id]() {
         if (!*alive)
             return;
@@ -378,6 +396,8 @@ void ImsCalls::detach()
         end(*s, 0, "IMS registration lost", s->info.state == ImsCallState::Dialing);
     endpoint_ = nullptr;
     registration_ = nullptr;
+    // The bearer went with the registration or the PDN, reported or not
+    voiceBearer_ = false;
 }
 
 void ImsCalls::handover()
@@ -416,6 +436,9 @@ void ImsCalls::addCommon(SipMessage &m, Session &s, bool body)
 {
     m.add("Contact", contact());
     m.add("Allow", kAllow);
+    if (!m.isRequest() && registration_)
+        if (std::string pani = registration_->accessNetworkInfo(); !pani.empty())
+            m.add("P-Access-Network-Info", pani);
     if (body && s.local) {
         m.add("Content-Type", "application/sdp");
         m.body = s.local->str();
@@ -449,18 +472,23 @@ void ImsCalls::sendInDialog(Session &s, SipMessage m, SipEndpoint::ResponseHandl
     endpoint_->send(std::move(m), registration_->route(), std::move(handler));
 }
 
-void ImsCalls::ack(Session &s, uint32_t cseq)
+std::string ImsCalls::ackVia() const
 {
-    if (!endpoint_)
-        return;  // detached: the registration and its sockets are going
-    SipMessage a = SipMessage::request("ACK", s.remoteTarget);
     Via via;
     via.transport = "UDP";
     via.host = endpoint_->localAddress();
     via.port = endpoint_->port(registration_->route().flow);
     via.params.set("branch", newBranch());
     via.params.set("rport");
-    a.add("Via", via.str());
+    return via.str();
+}
+
+void ImsCalls::ack(Session &s, uint32_t cseq)
+{
+    if (!endpoint_)
+        return;  // detached: the registration and its sockets are going
+    SipMessage a = SipMessage::request("ACK", s.remoteTarget);
+    a.add("Via", ackVia());
     for (const auto &r : s.routeSet)
         a.add("Route", r);
     a.add("Max-Forwards", "70");
@@ -492,7 +520,9 @@ std::string ImsCalls::targetUri(const std::string &number, const std::string &do
         return "sip:" + number;
     std::string n;
     for (char c : number)
-        if (!std::strchr(" -().", c))
+        if (c == '#')
+            n += "%23";  // not allowed bare in a URI's user part
+        else if (!std::strchr(" -().", c))
             n += c;
     // 24.229 5.1.2A.1.5: a global number as itself, a local one in the
     // context of the home domain; SIP URIs, as the stock profile's
@@ -527,7 +557,10 @@ std::optional<int> ImsCalls::dial(const std::string &dialled)
     s.info.state = ImsCallState::Dialing;
     s.callId = randomHex(32);
     s.localTag = randomHex(10);
-    s.localUri = "<" + reg.defaultImpu + ">";
+    // 24.607 4.5.2.4: a call that hides our number has an anonymous From
+    // (RFC 3323); the network still learns who calls from the
+    // P-Preferred-Identity and withholds it for the Privacy header
+    s.localUri = hide ? "\"Anonymous\" <sip:anonymous@anonymous.invalid>" : "<" + reg.defaultImpu + ">";
     s.remoteUri = "<" + target + ">";
     s.remoteTarget = target;
     s.port = port;
@@ -536,7 +569,7 @@ std::optional<int> ImsCalls::dial(const std::string &dialled)
     MediaCapabilities caps = profile_.media;
     caps.preconditions = profile_.preconditions;
     Sdp offer = makeOffer(caps, endpoint_->localAddress(), port, s.sdpId);
-    setPreconditions(offer, voiceBearer_, false);
+    setPreconditions(offer, haveBearer(), false);
     s.local = offer;
 
     SipMessage m = SipMessage::request("INVITE", target);
@@ -552,7 +585,7 @@ std::optional<int> ImsCalls::dial(const std::string &dialled)
     m.add("P-Preferred-Service", kMmtelService);
     m.add("P-Preferred-Identity", "<" + reg.defaultImpu + ">");
     if (hide)
-        m.add("Privacy", "id");  // 24.607 4.5.2.4: the network withholds our identity
+        m.add("Privacy", "id");  // the network withholds the asserted identity
     m.add("P-Early-Media", "supported");
     m.add("Supported", profile_.preconditions ? "100rel, precondition, timer" : "100rel, timer");
     m.add("Allow", kAllow);
@@ -590,7 +623,9 @@ void ImsCalls::sendInvite(Session &s, SipMessage invite)
             return;
         s->setupTimer = 0;
         log("call " + std::to_string(id) + ": no progress in time");
-        const bool nothing = !s->provisional;
+        // Nothing from the network, or our voice bearer never came: CS can
+        // still place the call (the far end has not rung)
+        const bool nothing = !s->provisional || (s->preconditions && !haveBearer());
         cancel(*s);
         end(*s, 408, "No answer from the network", nothing);
     });
@@ -658,13 +693,7 @@ void ImsCalls::forkAnswered(Session &s, const SipMessage &r)
         return m;
     };
     SipMessage ack = request("ACK", cseq->first);
-    Via via;
-    via.transport = "UDP";
-    via.host = endpoint_->localAddress();
-    via.port = endpoint_->port(registration_->route().flow);
-    via.params.set("branch", newBranch());
-    via.params.set("rport");
-    ack.add("Via", via.str());
+    ack.add("Via", ackVia());
     endpoint_->sendStateless(ack, registration_->route());
     s.forkAcks.emplace(tag, ack);
     log("call " + std::to_string(s.info.id) + ": a second fork answered, ending it");
@@ -737,7 +766,7 @@ void ImsCalls::sendQosUpdate(Session &s)
 {
     // Our resources are up: tell the other side with an UPDATE (RFC 3312
     // 5.1), once the offer/answer of the INVITE is done
-    if (s.info.state == ImsCallState::Ended || !s.preconditions || !voiceBearer_ || s.qosUpdateSent ||
+    if (s.info.state == ImsCallState::Ended || !s.preconditions || !haveBearer() || s.qosUpdateSent ||
         s.prackPending || s.reliable || !s.local || !s.remote || !s.remote->qos.present || s.confirmed ||
         s.local->qos.localCurrent || s.remoteTag.empty())
         return;
@@ -745,6 +774,7 @@ void ImsCalls::sendQosUpdate(Session &s)
     setPreconditions(sdp, true, s.remote->qos.localCurrent);
     s.local = sdp;
     s.qosUpdateSent = true;
+    s.offerOut = true;
     SipMessage u = inDialog(s, "UPDATE");
     addCommon(u, s, true);
     const int id = s.info.id;
@@ -754,8 +784,25 @@ void ImsCalls::sendQosUpdate(Session &s)
         if (!*alive || (r && r->status() < 200))
             return;
         Session *s = find(id);
+        if (s)
+            s->offerOut = false;
         if (!s || s->info.state == ImsCallState::Ended)
             return;
+        if (r && r->status() == 491) {
+            // Crossed with the other side's offer: ours again, later
+            s->qosUpdateSent = false;
+            if (s->local)
+                s->local->qos.localCurrent = false;
+            loop_.after(glareDelay(!s->info.incoming), [this, alive, id]() {
+                if (!*alive)
+                    return;
+                if (Session *s = find(id)) {
+                    sendQosUpdate(*s);
+                    checkIncomingReady(*s);
+                }
+            });
+            return;
+        }
         if (!r || r->status() >= 300) {
             log("call " + std::to_string(id) + ": UPDATE failed");
             return;
@@ -826,6 +873,7 @@ void ImsCalls::inviteAnswered(int id, const SipMessage *r)
         return;
     }
     if (status < 300) {
+        const std::string forkBefore = s.remoteTag;
         earlyDialog(s, *r);
         ack(s, s.inviteCseq);
         if (ended) {
@@ -839,8 +887,9 @@ void ImsCalls::inviteAnswered(int id, const SipMessage *r)
         s.ringbackTimer = 0;
         loop_.cancel(s.setupTimer);
         s.setupTimer = 0;
+        // Another fork's SDP is another session's, whatever its version
         if (auto sdp = sdpOf(*r))
-            if (!s.remote || sdp->version != s.remote->version)
+            if (!s.remote || s.remoteTag != forkBefore || sdp->version != s.remote->version)
                 remoteAnswer(s, *sdp);
         if (!s.remote) {
             log("call " + std::to_string(id) + ": answered without SDP");
@@ -979,7 +1028,7 @@ void ImsCalls::incoming(const SipMessage &request, const Source &source)
                       (request.hasOption("Supported", "100rel") || request.hasOption("Require", "100rel"));
     if (s.preconditions) {
         // Ask the other side to confirm when its resources are there
-        setPreconditions(*answer, voiceBearer_, s.remoteResources, !s.remoteResources);
+        setPreconditions(*answer, haveBearer(), s.remoteResources, !s.remoteResources);
     } else {
         answer->qos.present = false;
     }
@@ -991,6 +1040,20 @@ void ImsCalls::incoming(const SipMessage &request, const Source &source)
     sessions_[id] = std::move(owned);
     log("call " + std::to_string(id) + ": incoming" + (s.preconditions ? " (preconditions)" : ""));
     if (s.preconditions) {
+        // Resources that never come (ours or the caller's) do not hold the
+        // call for ever
+        auto alive = alive_;
+        s.setupTimer = loop_.after(std::chrono::seconds(profile_.setupTimer), [this, alive, id]() {
+            if (!*alive)
+                return;
+            Session *s = find(id);
+            if (!s || s->info.state != ImsCallState::Setup || !endpoint_)
+                return;
+            s->setupTimer = 0;
+            s->reliable.reset();
+            respondInvite(*s, 580, "Precondition Failure", false, false);
+            end(*s, 580, "No resources");
+        });
         respondInvite(s, 183, "Session Progress", true, true);
         s.answerSentReliably = true;
     }
@@ -1014,12 +1077,13 @@ void ImsCalls::respondInvite(Session &s, int status, const std::string &reason, 
     if (status >= 200 && status < 300 && s.sessionInterval) {
         r.add("Session-Expires",
               std::to_string(s.sessionInterval) + ";refresher=" + (s.weRefresh ? "uas" : "uac"));
-        r.add("Require", "timer");
+        if (s.inviteIn->hasOption("Supported", "timer"))  // RFC 4028 9
+            r.add("Require", "timer");
     }
     if (reliable) {
         // Sent again until its PRACK (RFC 3262 3)
         s.reliable = r;
-        s.relInterval = profile_.timers.t1;
+        s.relInterval = profile_.timers.first();
         s.relElapsed = std::chrono::milliseconds(0);
         const int id = s.info.id;
         auto alive = alive_;
@@ -1045,7 +1109,7 @@ void ImsCalls::retransmitReliable(int id)
         return;
     s->relTimer = 0;
     s->relElapsed += s->relInterval;
-    if (s->relElapsed >= profile_.timers.t1 * 64) {
+    if (s->relElapsed >= profile_.timers.limit()) {
         // RFC 3262 3: no PRACK, the INVITE fails with a 5xx
         log("call " + std::to_string(id) + ": no PRACK");
         s->reliable.reset();
@@ -1065,7 +1129,7 @@ void ImsCalls::retransmitReliable(int id)
 void ImsCalls::startOkRetransmit(Session &s)
 {
     loop_.cancel(s.okTimer);
-    s.okInterval = profile_.timers.t1;
+    s.okInterval = profile_.timers.first();
     s.okElapsed = std::chrono::milliseconds(0);
     const int id = s.info.id;
     auto alive = alive_;
@@ -1083,7 +1147,7 @@ void ImsCalls::retransmitOk(int id)
         return;
     s->okTimer = 0;
     s->okElapsed += s->okInterval;
-    if (s->okElapsed >= profile_.timers.t1 * 64) {
+    if (s->okElapsed >= profile_.timers.limit()) {
         log("call " + std::to_string(id) + ": no ACK");
         s->ok.reset();
         sendBye(*s);
@@ -1105,7 +1169,7 @@ void ImsCalls::checkIncomingReady(Session &s)
         return;
     if (s.preconditions) {
         sendQosUpdate(s);
-        if (s.reliable || !s.remoteResources || !voiceBearer_)
+        if (s.reliable || !s.remoteResources || !haveBearer())
             return;
     }
     respondInvite(s, 180, "Ringing", false, false);
@@ -1154,12 +1218,8 @@ bool ImsCalls::answer(int id)
     if (s->offerless)
         s->answerInAck = true;
     s->confirmed = true;
-    if (s->sessionInterval) {
-        SipMessage fake = SipMessage::response(200, "OK");
-        fake.add("Session-Expires",
-                 std::to_string(s->sessionInterval) + ";refresher=" + (s->weRefresh ? "uas" : "uac"));
-        sessionTimer(*s, fake, false);
-    }
+    if (s->sessionInterval)
+        startSessionTimer(*s, s->sessionInterval, s->weRefresh);
     setState(*s, ImsCallState::Active);
     syncMedia(*s);
     return true;
@@ -1229,6 +1289,12 @@ bool ImsCalls::handleRequest(const SipMessage &request, const Source &source)
         endpoint_->respond(source, request, request.makeResponse(481, "Call/Transaction Does Not Exist"));
         return true;
     }
+    // RFC 3261 12.2.2: a request of another dialog of this call (a fork we
+    // did not take) is not this dialog's
+    if (tagOf(request.header("From")) != s->remoteTag || tagOf(request.header("To")) != s->localTag) {
+        endpoint_->respond(source, request, request.makeResponse(481, "Call/Transaction Does Not Exist"));
+        return true;
+    }
     inDialogRequest(*s, request, source);
     return true;
 }
@@ -1243,13 +1309,24 @@ void ImsCalls::inDialogRequest(Session &s, const SipMessage &request, const Sour
         return;
     }
     if (method == "PRACK") {
+        bool matched = false;
         if (s.reliable) {
             const std::string rack = request.header("RAck").value_or("");
             if (rack.starts_with(std::to_string(s.rseq) + " ")) {
                 s.reliable.reset();
                 loop_.cancel(s.relTimer);
                 s.relTimer = 0;
+                matched = true;
             }
+        }
+        if (!matched) {  // RFC 3262 3: no reliable answer of ours it belongs to
+            endpoint_->respond(source, request, request.makeResponse(481, "Call/Transaction Does Not Exist"));
+            return;
+        }
+        // A new offer in the PRACK (RFC 3262 5): answered in its 200
+        if (isSdp(request)) {
+            offerReceived(s, request, source);
+            return;
         }
         endpoint_->respond(source, request, ok);
         checkIncomingReady(s);
@@ -1270,6 +1347,11 @@ void ImsCalls::offerReceived(Session &s, const SipMessage &request, const Source
         // RFC 3261 14.2: an INVITE while ours is pending
         SipMessage r = request.makeResponse(491, "Request Pending");
         endpoint_->respond(source, request, r);
+        return;
+    }
+    if (!invite && isSdp(request) && (s.offerOut || s.reinvitePending)) {
+        // RFC 3311 5.2: an offer while ours is not answered yet
+        endpoint_->respond(source, request, request.makeResponse(491, "Request Pending"));
         return;
     }
     if (invite)
@@ -1304,7 +1386,7 @@ void ImsCalls::offerReceived(Session &s, const SipMessage &request, const Source
             makeDirection(hasRecv(offer->direction), !s.localHold && hasSend(offer->direction));
         if (s.preconditions && offer->qos.present) {
             answer.qos.present = true;
-            setPreconditions(answer, voiceBearer_ || s.confirmed, offer->qos.localCurrent);
+            setPreconditions(answer, haveBearer() || s.confirmed, offer->qos.localCurrent);
         } else {
             answer.qos.present = false;
         }
@@ -1325,11 +1407,13 @@ void ImsCalls::offerReceived(Session &s, const SipMessage &request, const Source
         Params p = Params::parse(*se);
         const std::string refresher = p.get("refresher").value_or("uac");
         r.add("Session-Expires", se->substr(0, se->find(';')) + ";refresher=" + refresher);
-        r.add("Require", "timer");
-        SipMessage view = SipMessage::response(200, "OK");
-        view.add("Session-Expires", se->substr(0, se->find(';')) + ";refresher=" + refresher);
-        sessionTimer(s, view, false);
+        if (request.hasOption("Supported", "timer"))  // RFC 4028 9
+            r.add("Require", "timer");
     }
+    // The timer as our answer has it: a re-INVITE or UPDATE without
+    // Session-Expires ends it (RFC 4028 9), the other side refreshes no more
+    if (request.method() != "PRACK")
+        sessionTimer(s, r, false);
     if (invite) {
         s.ok = r;
         s.okRequest = request;
@@ -1428,7 +1512,8 @@ void ImsCalls::reinvite(Session &s, bool holdCall)
     addCommon(m, s, true);
     m.add("Supported", "100rel, precondition, timer");
     if (s.sessionInterval)
-        m.add("Session-Expires", std::to_string(s.sessionInterval) + ";refresher=uac");
+        m.add("Session-Expires",  // the refresher stays who it was (RFC 4028 7.4)
+              std::to_string(s.sessionInterval) + ";refresher=" + (s.weRefresh ? "uac" : "uas"));
     const int id = s.info.id;
     const uint32_t cseq = s.inviteCseq;
     auto alive = alive_;
@@ -1443,6 +1528,23 @@ void ImsCalls::reinvite(Session &s, bool holdCall)
         if (s->info.state == ImsCallState::Ended) {
             if (r && r->status() < 300)
                 ack(*s, cseq);
+            return;
+        }
+        if (r && r->status() == 491) {
+            // Crossed with the other side's re-INVITE: once more, later
+            s->local = previous;
+            loop_.after(glareDelay(!s->info.incoming), [this, alive, id, holdCall]() {
+                if (!*alive)
+                    return;
+                Session *s = find(id);
+                if (!s || s->info.state == ImsCallState::Ended)
+                    return;
+                if (endpoint_ && !s->reinvitePending && !s->ok &&
+                    s->info.state == (holdCall ? ImsCallState::Active : ImsCallState::Held))
+                    reinvite(*s, holdCall);
+                else
+                    notify(*s);
+            });
             return;
         }
         if (!r || r->status() >= 300) {
@@ -1462,8 +1564,7 @@ void ImsCalls::reinvite(Session &s, bool holdCall)
         s->localHold = holdCall;
         if (s->remote)
             s->info.remoteHeld = !hasRecv(s->remote->direction);
-        if (r->has("Session-Expires"))
-            sessionTimer(*s, *r, true);
+        sessionTimer(*s, *r, true);  // none in the answer: no timer any more
         setState(*s, holdCall ? ImsCallState::Held : ImsCallState::Active);
         syncMedia(*s);
     });
@@ -1473,11 +1574,27 @@ void ImsCalls::reinvite(Session &s, bool holdCall)
 
 void ImsCalls::bearer(int bearerId, int qci, bool added)
 {
-    (void)bearerId;
     if (qci != 1)
         return;  // QCI 1 carries conversational voice (TS 23.203)
+    // The release of an older bearer does not take the current one away
+    if (!added && voiceBearer_ && bearerId != voiceBearerId_)
+        return;
     voiceBearer_ = added;
-    if (!added || !endpoint_)
+    voiceBearerId_ = bearerId;
+    if (added)
+        bearerStaleUntil_ = {};  // a new report: current
+    if (added)
+        recheckBearer();
+}
+
+bool ImsCalls::haveBearer() const
+{
+    return voiceBearer_ && std::chrono::steady_clock::now() >= bearerStaleUntil_;
+}
+
+void ImsCalls::recheckBearer()
+{
+    if (!haveBearer() || !endpoint_)
         return;
     std::vector<int> ids;
     for (auto &[id, s] : sessions_)
@@ -1599,24 +1716,31 @@ void ImsCalls::syncMedia(Session &s)
     updateAudio();
 }
 
+// The session timer a 2xx (or our own answer) sets; none in it: no timer
 void ImsCalls::sessionTimer(Session &s, const SipMessage &message, bool weAreUac)
+{
+    auto se = message.header("Session-Expires");
+    unsigned interval = 0;
+    if (se) {
+        try {
+            interval = static_cast<unsigned>(std::stoul(*se));
+        } catch (...) {
+        }
+    }
+    const std::string refresher = se ? Params::parse(*se).get("refresher").value_or("uas") : std::string();
+    startSessionTimer(s, interval, (refresher == "uac") == weAreUac);
+}
+
+void ImsCalls::startSessionTimer(Session &s, unsigned interval, bool weRefresh)
 {
     loop_.cancel(s.sessionTimer);
     s.sessionTimer = 0;
-    auto se = message.header("Session-Expires");
-    if (!se)
-        return;
-    unsigned interval = 0;
-    try {
-        interval = static_cast<unsigned>(std::stoul(*se));
-    } catch (...) {
+    if (interval < 90) {  // none in force (RFC 4028: 90 s is the least)
+        s.sessionInterval = 0;
         return;
     }
-    if (interval < 90)
-        return;
-    const std::string refresher = Params::parse(*se).get("refresher").value_or("uas");
     s.sessionInterval = interval;
-    s.weRefresh = (refresher == "uac") == weAreUac;
+    s.weRefresh = weRefresh;
     const int id = s.info.id;
     auto alive = alive_;
     if (s.weRefresh) {
@@ -1664,20 +1788,12 @@ void ImsCalls::refreshSession(int id)
             end(*s, r ? r->status() : 408, "Session refresh failed");
             return;
         }
-        if (r->status() >= 300) {
-            // Keep the call; try again at the next half interval
-            SipMessage view = SipMessage::response(200, "OK");
-            view.add("Session-Expires", std::to_string(s->sessionInterval) + ";refresher=uac");
-            sessionTimer(*s, view, true);
-            return;
-        }
-        if (r->has("Session-Expires")) {
+        // A refusal keeps the call: again at the next half interval, as
+        // after an answer that names no interval
+        if (r->status() < 300 && r->has("Session-Expires"))
             sessionTimer(*s, *r, true);
-        } else {
-            SipMessage view = SipMessage::response(200, "OK");
-            view.add("Session-Expires", std::to_string(s->sessionInterval) + ";refresher=uac");
-            sessionTimer(*s, view, true);
-        }
+        else
+            startSessionTimer(*s, s->sessionInterval, true);
     });
 }
 

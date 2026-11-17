@@ -334,7 +334,14 @@ bool LinuxImsNetwork::installSas(const SaSet &s)
             std::memcpy(cryptBuf + sizeof(xfrm_algo), s.encryptionKey.data(), s.encryptionKey.size());
         m.attr(XFRMA_ALG_CRYPT, cryptBuf, sizeof(xfrm_algo) + s.encryptionKey.size());
 
-        if (!xfrm(m.header(), m.header()->nlmsg_len)) {
+        bool ok = xfrm(m.header(), m.header()->nlmsg_len);
+        if (!ok && one.inbound) {
+            // The reservation ran out (the kernel keeps one for 30 s): the
+            // association as a new one
+            m.header()->nlmsg_type = XFRM_MSG_NEWSA;
+            ok = xfrm(m.header(), m.header()->nlmsg_len);
+        }
+        if (!ok) {
             removeSas(s);
             return false;
         }

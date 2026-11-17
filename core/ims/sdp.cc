@@ -104,17 +104,20 @@ std::string Sdp::str() const
     o << "o=" << origin << " " << sessionId << " " << version << " " << addressLine(address) << "\r\n";
     o << "s=-\r\n";
     o << "c=" << addressLine(address) << "\r\n";
+    o << "t=0 0\r\n";
+    for (const std::string &m : rejectedBefore)
+        o << m << "\r\n";
+    o << "m=audio " << port << " RTP/AVP";
+    for (const Codec &c : codecs)
+        o << " " << unsigned(c.payloadType);
+    o << "\r\n";
+    // On the stream (TS 26.114 6.2.5): the bearer's bit rates come from here
     if (bandwidthAs)
         o << "b=AS:" << bandwidthAs << "\r\n";
     if (bandwidthRs)
         o << "b=RS:" << bandwidthRs << "\r\n";
     if (bandwidthRr)
         o << "b=RR:" << bandwidthRr << "\r\n";
-    o << "t=0 0\r\n";
-    o << "m=audio " << port << " RTP/AVP";
-    for (const Codec &c : codecs)
-        o << " " << unsigned(c.payloadType);
-    o << "\r\n";
     for (const Codec &c : codecs) {
         o << "a=rtpmap:" << unsigned(c.payloadType) << " " << c.name << "/" << c.rate
           << (c.name == "telephone-event" ? "" : "/1") << "\r\n";
@@ -136,6 +139,8 @@ std::string Sdp::str() const
             o << "a=conf:qos remote sendrecv\r\n";
     }
     o << "a=" << directionName(direction) << "\r\n";
+    for (const std::string &m : rejectedAfter)
+        o << m << "\r\n";
     return o.str();
 }
 
@@ -177,10 +182,16 @@ std::optional<Sdp> Sdp::parse(const std::string &text)
             }
         } else if (type == 'm') {
             auto w = words(v);
-            if (audio)  // only the first audio stream is ours
-                break;
-            skipping = !(w.size() >= 3 && w[0] == "audio");
+            // Only the first audio stream is ours; the others are kept as
+            // rejected lines
+            skipping = audio || !(w.size() >= 3 && w[0] == "audio");
             inMedia = !skipping;
+            if (skipping && w.size() >= 3) {
+                std::string line = "m=" + std::string(w[0]) + " 0";
+                for (size_t i = 2; i < w.size(); i++)
+                    line += " " + std::string(w[i]);
+                (audio ? sdp.rejectedAfter : sdp.rejectedBefore).push_back(line);
+            }
             if (!skipping) {
                 audio = true;
                 number(w[1], sdp.port);
@@ -347,6 +358,8 @@ std::optional<Sdp> makeAnswer(const MediaCapabilities &caps, const Sdp &offer, c
     s.bandwidthRs = caps.bandwidthRs;
     s.bandwidthRr = caps.bandwidthRr;
     s.direction = reverse(offer.direction);
+    s.rejectedBefore = offer.rejectedBefore;
+    s.rejectedAfter = offer.rejectedAfter;
     if (offer.qos.present && caps.preconditions) {
         s.qos.present = true;
         s.qos.localDesired = "mandatory";

@@ -355,10 +355,20 @@ void Ims::pdnUp(const DataCall &call)
             return;
         if (calls_->handleRequest(request, source))
             return;
-        if (requestHandler_)
+        if (requestHandler_) {
             requestHandler_(request, source);
-        else
+        } else if (request.method() == "OPTIONS") {
+            // What we can do (RFC 3261 11.2)
+            SipMessage ok = request.makeResponse(200, "OK");
+            ok.add("Allow", kAllow);
+            ok.add("Accept", "application/sdp");
+            ok.add("Supported", "100rel, precondition, timer");
+            endpoint_->respond(source, request, ok);
+        } else if (request.method() == "NOTIFY") {
+            endpoint_->respond(source, request, request.makeResponse(481, "Subscription Does Not Exist"));
+        } else {
             endpoint_->respond(source, request, request.makeResponse(501, "Not Implemented"));
+        }
     });
     phase_ = Phase::Address;
     why_ = "waiting for an address on " + call.iface;

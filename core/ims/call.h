@@ -124,6 +124,7 @@ private:
     void sendInDialog(Session &s, SipMessage m, SipEndpoint::ResponseHandler handler);
     void sendBye(Session &s);
     void ack(Session &s, uint32_t cseq);
+    std::string ackVia() const;  // the Via of an ACK for a 2xx
 
     // Outgoing
     void inviteAnswered(int id, const SipMessage *response);
@@ -152,6 +153,7 @@ private:
     void syncMedia(Session &s);
     MediaSetup mediaSetup(const Session &s) const;
     void sessionTimer(Session &s, const SipMessage &message, bool weAreUac);
+    void startSessionTimer(Session &s, unsigned interval, bool weRefresh);
     void refreshSession(int id);
 
     EventLoop &loop_;
@@ -163,6 +165,12 @@ private:
     std::map<int, std::unique_ptr<Session>> sessions_;
     int nextId_ = 1;
     bool voiceBearer_ = false;  // a QCI 1 dedicated bearer is up
+    int voiceBearerId_ = 0;
+    // After the last call ended its bearer is on its way out: not counted
+    // for a new call until then (the release normally comes within it)
+    std::chrono::steady_clock::time_point bearerStaleUntil_{};
+    bool haveBearer() const;
+    void recheckBearer();
     bool audioOn_ = false;
     EventLoop::TimerId handoverHold_ = 0;
     std::vector<Changed> changed_;

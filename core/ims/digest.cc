@@ -147,6 +147,8 @@ std::string digestAuthorization(const DigestChallenge &challenge, const DigestCr
     std::string response = challenge.qopAuth
                                 ? md5Hex(ha1 + ":" + challenge.nonce + ":" + ncs + ":" + cnonce + ":auth:" + ha2)
                                 : md5Hex(ha1 + ":" + challenge.nonce + ":" + ha2);
+    if (credentials.emptyResponse)
+        response.clear();
 
     std::string out = "Digest username=" + quote(credentials.username) + ",realm=" + quote(challenge.realm) +
                       ",nonce=" + quote(challenge.nonce) + ",uri=" + quote(credentials.uri) +

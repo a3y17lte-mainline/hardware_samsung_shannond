@@ -45,6 +45,7 @@ struct DigestCredentials {
     // or a challenge the SIM refused
     Bytes password;
     std::optional<Bytes> auts;  // resynchronisation (RFC 3310 3.4)
+    bool emptyResponse = false;  // the challenge failed the SIM's check: response=""
 };
 
 // The Authorization header value for a challenge. cnonce and nc are the

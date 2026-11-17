@@ -25,6 +25,8 @@ ImsProfile telefonicaCz()
     p.timers.t1 = std::chrono::milliseconds(500);
     p.timers.t2 = std::chrono::milliseconds(4000);
     p.timers.t4 = std::chrono::milliseconds(5000);
+    p.timers.retransmit = std::chrono::milliseconds(2000);  // A, E, G
+    p.timers.timeout = std::chrono::milliseconds(128000);   // B, F, H, J
     p.preconditions = true;
     p.sessionExpires = 3600;
     p.ringingTimer = 90;
@@ -34,6 +36,7 @@ ImsProfile telefonicaCz()
     p.csfbCodes = {403};
     p.conferenceUri = "sip:mmtel@conf-factory.ims.mnc002.mcc230.3gppnetwork.org";
     p.access = {{"lte", {"mmtel"}}};
+    p.roaming = true;  // support_roaming
     return p;
 }
 

@@ -77,14 +77,14 @@ uint16_t modeMask(const Codec &c, unsigned highest)
 std::optional<CodecInfo> codecInfo(const Codec &c)
 {
     CodecInfo info;
-    if (c.name == "AMR-WB") {
+    if (iequals(c.name, "AMR-WB")) {
         info.id = IPC_IMS_CODEC_AMR_WB;
         info.mode = c.highestMode().value_or(8);
         if (info.mode > 8)
             return std::nullopt;
         info.bitrate = IPC_IMS_BITRATE_AMR_WB_6600 << info.mode;
         info.modeMask = modeMask(c, 8);
-    } else if (c.name == "AMR") {
+    } else if (iequals(c.name, "AMR")) {
         info.id = IPC_IMS_CODEC_AMR;
         info.mode = c.highestMode().value_or(7);
         if (info.mode > 7)
