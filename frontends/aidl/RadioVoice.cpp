@@ -4,6 +4,7 @@
 #include "frontends/aidl/Codec.h"
 
 #include <cstdio>
+#include <functional>
 #include <sys/system_properties.h>
 #include <thread>
 
@@ -41,8 +42,10 @@ bool hasIncoming(const std::vector<Call> &calls)
 }
 
 // The audio HAL names the call's output here (handset, speaker, headset,
-// headphone); the modem needs it for its echo and noise tuning
+// headphone), for the modem's echo and noise tuning, and gives the call
+// volume as a level from 0 to 5: the modem sets it
 constexpr const char *kCallPathProperty = "vendor.audio.call_path";
+constexpr const char *kCallVolumeProperty = "vendor.audio.call_volume";
 
 uint8_t callAudioPath()
 {
@@ -56,30 +59,50 @@ uint8_t callAudioPath()
     return IPC_SND_AUDIO_PATH_HANDSET;
 }
 
-}  // namespace
-
-RadioVoice::RadioVoice(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
+uint8_t callVolume()
 {
-    // Follows the property for as long as the service runs
-    std::thread([stack = stack_] {
+    return static_cast<uint8_t>(
+            ::android::base::GetUintProperty<unsigned int>(kCallVolumeProperty, 4, kMaxCallVolume));
+}
+
+// Runs fn now and after every change of the property, for as long as the
+// service runs
+void follow(const char *property, std::function<void()> fn)
+{
+    std::thread([property, fn = std::move(fn)] {
         uint32_t global = 0;
         uint32_t serial = 0;
         for (;;) {
-            const uint8_t path = callAudioPath();
-            stack->post([path](Core *core) {
-                if (core)
-                    core->calls.setAudioPath(path);
-            });
+            fn();
             // Until the property exists, any property change wakes this
-            if (const prop_info *info = __system_property_find(kCallPathProperty))
+            if (const prop_info *info = __system_property_find(property))
                 __system_property_wait(info, serial, &serial, nullptr);
             else
                 __system_property_wait(nullptr, global, &global, nullptr);
         }
     }).detach();
+}
+
+}  // namespace
+
+RadioVoice::RadioVoice(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
+{
+    follow(kCallPathProperty, [stack = stack_] {
+        stack->post([path = callAudioPath()](Core *core) {
+            if (core)
+                core->calls.setAudioPath(path);
+        });
+    });
+    follow(kCallVolumeProperty, [stack = stack_] {
+        stack->post([volume = callVolume()](Core *core) {
+            if (core)
+                core->calls.setVolume(volume);
+        });
+    });
 
     stack_->onReady([this](Core &core) {
         core.calls.setAudioPath(callAudioPath());
+        core.calls.setVolume(callVolume());
         auto ringing = std::make_shared<bool>(false);
         core.calls.onChanged([this, &core, ringing] {
             auto i = indication();

@@ -25,6 +25,8 @@ struct Call {
     std::string number;
 };
 
+constexpr uint8_t kMaxCallVolume = 5;
+
 class Calls {
 public:
     using Done = std::function<void(bool ok)>;
@@ -50,12 +52,15 @@ public:
     // noise tuning for the handset, the speaker or a headset. Sent when a
     // call starts, and at once when it changes during one
     void setAudioPath(uint8_t path);
+    // The call volume, 0 to kMaxCallVolume: the modem sets the level
+    void setVolume(uint8_t volume);
 
 private:
     void status(const Message &message);
     void listReceived(const Message &message);
     void setAudio(bool active);
     void sendAudioPath();
+    void sendVolume();
     void notify();
 
     Modem &modem_;

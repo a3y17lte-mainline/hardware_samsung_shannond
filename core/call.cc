@@ -109,7 +109,11 @@ void Calls::sendAudioPath()
     ipc_snd_audio_path_ctrl_data path{};
     path.path = audioPath_;
     modem_.request(IPC_SND_AUDIO_PATH_CTRL, IPC_TYPE_SET, path);
+    sendVolume();
+}
 
+void Calls::sendVolume()
+{
     // The modem keeps a volume per kind of output
     ipc_snd_spkr_volume_ctrl_data volume{};
     switch (audioPath_) {
@@ -120,6 +124,16 @@ void Calls::sendAudioPath()
     }
     volume.volume = volume_;
     modem_.request(IPC_SND_SPKR_VOLUME_CTRL, IPC_TYPE_SET, volume);
+}
+
+void Calls::setVolume(uint8_t volume)
+{
+    volume = volume > kMaxCallVolume ? kMaxCallVolume : volume;
+    if (volume == volume_)
+        return;
+    volume_ = volume;
+    if (audioActive_)
+        sendVolume();
 }
 
 void Calls::setAudioPath(uint8_t path)

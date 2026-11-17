@@ -184,6 +184,13 @@ TEST(outgoing_call_connects_and_switches_audio)
     s.calls.setAudioPath(IPC_SND_AUDIO_PATH_SPEAKER);
     CHECK(s.loop.runUntil([&] { return s.fake.count(IPC_SND_AUDIO_PATH_CTRL) == 2; }));
 
+    // The volume keys: one message a step, the level capped
+    const size_t volumes = s.fake.count(IPC_SND_SPKR_VOLUME_CTRL);
+    s.calls.setVolume(2);
+    s.calls.setVolume(2);
+    s.calls.setVolume(9);
+    CHECK(s.loop.runUntil([&] { return s.fake.count(IPC_SND_SPKR_VOLUME_CTRL) == volumes + 2; }));
+
     bool hung = false;
     s.calls.hangup([&](bool ok) { hung = ok; });
     CHECK(s.loop.runUntil([&] { return hung && s.calls.list().empty(); }));
