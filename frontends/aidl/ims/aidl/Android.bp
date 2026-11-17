@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // The private interface between the radio HAL (shannond) and the ShannonIms
-// ImsService app. Freeze before a release-config build: until an aidl_api
-// dump exists the interface only builds where unfrozen interfaces are allowed
-// (m vendor.shannond.ims-freeze-api, then commit aidl_api/ and drop "frozen").
+// ImsService app. Frozen as V1 (aidl_api/vendor.shannond.ims/1, .hash as the
+// build computes it); a change needs V2: m vendor.shannond.ims-update-api,
+// then m vendor.shannond.ims-freeze-api, and the users moved to -V2-.
 
 aidl_interface {
     name: "vendor.shannond.ims",
@@ -11,7 +11,13 @@ aidl_interface {
     vendor_available: true,
     srcs: ["vendor/shannond/ims/*.aidl"],
     stability: "vintf",
-    frozen: false,
+    versions_with_info: [
+        {
+            version: "1",
+            imports: [],
+        },
+    ],
+    frozen: true,
     backend: {
         cpp: {
             enabled: false,

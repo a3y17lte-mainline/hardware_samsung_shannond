@@ -6,7 +6,7 @@
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
 APP=$HERE/..
-AIDL=$APP/../../frontends/aidl/ims/aidl
+AIDL=$APP/../../frontends/aidl/ims/aidl/vendor
 OUT=${1:-$(mktemp -d)}
 mkdir -p "$OUT/gen" "$OUT/classes"
 python3 "$HERE/gen_aidl_java.py" "$AIDL" "$OUT/gen"
