@@ -32,11 +32,11 @@ Channels selectedChannels(const std::vector<BroadcastRange> &ranges)
     for (const BroadcastRange &r : ranges) {
         const uint16_t from = std::min(r.fromId, r.toId);
         const uint16_t to = std::max(r.fromId, r.toId);
-        const bool normal = to < kNormalChannels;
-        const bool warning = from >= kWarningFirst && to <= kWarningLast;
-        if (!normal && !warning)
-            continue;  // the modem has no filter for these
-        for (uint32_t id = from; id <= to; id++)
+        // Only what the modem has a filter for: the parts of the range in
+        // the normal and the warning channels
+        for (uint32_t id = from; id <= std::min<uint32_t>(to, kNormalChannels - 1); id++)
+            channels[id] = r.selected;
+        for (uint32_t id = std::max(from, kWarningFirst); id <= std::min(to, kWarningLast); id++)
             channels[id] = r.selected;
     }
     return channels;
@@ -214,6 +214,8 @@ void Sms::send(const Bytes &tpdu, Sent done, const Bytes *smscOverride)
                    [this](const Result &r) {
                        // Refused outright: there will be no send result
                        if (!r.ok && !sending_.empty()) {
+                           if (r.timeout)
+                               abandoned_.push_back(std::chrono::steady_clock::now());
                            auto done = std::move(sending_.front());
                            sending_.pop_front();
                            done(SmsSendResult{});
@@ -225,7 +227,18 @@ void Sms::send(const Bytes &tpdu, Sent done, const Bytes *smscOverride)
 void Sms::sendResult(const Message &message)
 {
     auto result = message.as<ipc_sms_send_msg_response_data>();
-    if (!result || sending_.empty())
+    if (!result)
+        return;
+    // The result of a send that timed out, late (the modem sends in order)
+    const auto now = std::chrono::steady_clock::now();
+    while (!abandoned_.empty() && now - abandoned_.front() > std::chrono::seconds(30))
+        abandoned_.pop_front();
+    if (!abandoned_.empty()) {
+        abandoned_.pop_front();
+        modem_.log("late SMS send result 0x%04x dropped", result->ack);
+        return;
+    }
+    if (sending_.empty())
         return;
 
     auto done = std::move(sending_.front());

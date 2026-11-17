@@ -29,12 +29,12 @@ RadioMessaging::RadioMessaging(std::shared_ptr<Stack> stack) : stack_(std::move(
 {
     stack_->onReady([this](Core &core) {
         // The framework acknowledges each message once it has stored it
-        // (acknowledgeLastIncomingGsmSms); without a framework the core
-        // does so itself
+        // (acknowledgeLastIncomingGsmSms); without a framework nobody has
+        // it: refused, so that the network sends it again later
         core.sms.onIncoming([this, &core](const Bytes &pdu, bool statusReport) {
             auto i = indication();
             if (!i) {
-                core.sms.acknowledge(true, false);
+                core.sms.acknowledge(false, false);
                 return;
             }
             if (statusReport)

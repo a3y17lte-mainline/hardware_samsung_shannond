@@ -172,6 +172,8 @@ void Data::connect(unsigned int cid, const DataProfile &profile, Done done)
     modem_.loop().after(kConnectTimeout, [this, cid, attempt] {
         if (pending_.count(cid) && attempts_[cid] == attempt) {
             modem_.log("data call %u: no IP configuration", cid);
+            // Not left to come up later, with nobody to own it
+            disconnect(cid);
             complete(cid, false);
         }
     });
@@ -210,10 +212,11 @@ void Data::sendProfile(unsigned int cid, const DataProfile &profile)
 void Data::activate(unsigned int cid, const DataProfile &profile, int attempt)
 {
     // The IMS PDN as the stock RIL defines it: its IP type and a request for
-    // P-CSCF addresses. Other contexts as before (IPv4), which is what the
+    // P-CSCF addresses. Other contexts in the same frame with their IP type
+    // and no such request; a plain IPv4 one as before, which is what the
     // phone was tested with
     Bytes define;
-    if (profile.ims) {
+    if (profile.ims || profile.protocol != IpProtocol::Ipv4) {
         ipc_gprs_define_pdp_context_ext_data ext;
         uint8_t type = IPC_GPRS_PDP_TYPE_IPV4V6, pcscf = IPC_GPRS_PCSCF_REQUEST_IPV4V6;
         if (profile.protocol == IpProtocol::Ipv4) {
@@ -223,6 +226,8 @@ void Data::activate(unsigned int cid, const DataProfile &profile, int attempt)
             type = IPC_GPRS_PDP_TYPE_IPV6;
             pcscf = IPC_GPRS_PCSCF_REQUEST_IPV6;
         }
+        if (!profile.ims)
+            pcscf = IPC_GPRS_PCSCF_REQUEST_NONE;
         if (ipc_gprs_define_pdp_context_ext_setup(&ext, cid, type, profile.apn.c_str(), pcscf) < 0) {
             complete(cid, false);
             return;
@@ -297,6 +302,11 @@ void Data::ipConfiguration(const Message &message)
     const unsigned int cid = config.cid;
     DataCall &call = calls_[cid];
     call.cid = cid;
+    // The configuration again for a context that is up: its link stays,
+    // with the sockets and routes on it, unless the address changed
+    const bool wasUp = call.active && !call.iface.empty();
+    const auto oldIpv4 = call.ipv4;
+    const auto oldIpv6 = call.ipv6InterfaceId;
 
     if (config.flags & IPC_GPRS_IP_CONFIGURATION_FLAG_IPV4)
         call.ipv4 = arr<4>(config.ipv4);
@@ -324,7 +334,8 @@ void Data::ipConfiguration(const Message &message)
         return;
     }
 
-    if (!links_.up || !links_.up(call)) {
+    const bool sameLink = wasUp && call.ipv4 == oldIpv4 && call.ipv6InterfaceId == oldIpv6;
+    if (!sameLink && (!links_.up || !links_.up(call))) {
         modem_.log("data call %u: no network interface", cid);
         complete(cid, false);
         return;

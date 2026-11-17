@@ -58,7 +58,10 @@ DataProfile dataProfile(const data::DataProfileInfo &info, bool roaming)
     profile.username = info.user;
     profile.password = info.password;
     profile.auth = authType(info.authType);
-    profile.ims = info.supportedApnTypesBitmap & static_cast<int32_t>(data::ApnTypes::IMS);
+    // An APN that is also the default one is Android's own data context,
+    // not the IMS PDN (which the HAL brings up itself)
+    profile.ims = (info.supportedApnTypesBitmap & static_cast<int32_t>(data::ApnTypes::IMS)) &&
+                  !(info.supportedApnTypesBitmap & static_cast<int32_t>(data::ApnTypes::DEFAULT));
     return profile;
 }
 

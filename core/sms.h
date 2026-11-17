@@ -114,6 +114,8 @@ private:
     std::deque<Pending> unacknowledged_;
     std::function<void(bool)> simFull_;
     std::deque<Sent> sending_;
+    // Sends given up on, whose result may still come: not the next one's
+    std::deque<std::chrono::steady_clock::time_point> abandoned_;
     std::function<void(const CellBroadcast &)> broadcast_;
     std::vector<BroadcastRange> broadcastRanges_;
     bool broadcastActive_ = false;
