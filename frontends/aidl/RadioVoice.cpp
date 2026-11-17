@@ -42,10 +42,12 @@ bool hasIncoming(const std::vector<Call> &calls)
 }
 
 // The audio HAL names the call's output here (handset, speaker, headset,
-// headphone), for the modem's echo and noise tuning, and gives the call
-// volume as a level from 0 to 5: the modem sets it
+// headphone), for the modem's echo and noise tuning, gives the call
+// volume as a level from 0 to 5 (the modem sets it) and the microphone
+// mute (Telecom mutes calls through the audio HAL, as on stock)
 constexpr const char *kCallPathProperty = "vendor.audio.call_path";
 constexpr const char *kCallVolumeProperty = "vendor.audio.call_volume";
+constexpr const char *kCallMuteProperty = "vendor.audio.call_mute";
 
 uint8_t callAudioPath()
 {
@@ -99,6 +101,12 @@ RadioVoice::RadioVoice(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
                 core->calls.setVolume(volume);
         });
     });
+    follow(kCallMuteProperty, [stack = stack_] {
+        stack->post([mute = ::android::base::GetBoolProperty(kCallMuteProperty, false)](Core *core) {
+            if (core)
+                core->calls.setMicMute(mute);
+        });
+    });
 
     stack_->onReady([this](Core &core) {
         core.ss.onUssd([this](UssdMode mode, const std::string &text) {
@@ -107,6 +115,7 @@ RadioVoice::RadioVoice(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
         });
         core.calls.setAudioPath(callAudioPath());
         core.calls.setVolume(callVolume());
+        core.calls.setMicMute(::android::base::GetBoolProperty(kCallMuteProperty, false));
         auto ringing = std::make_shared<bool>(false);
         core.calls.onChanged([this, &core, ringing] {
             auto i = indication();

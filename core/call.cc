@@ -109,8 +109,11 @@ void Calls::setAudio(bool active)
         return;
     audioActive_ = active;
 
-    if (active)
+    if (active) {
         sendAudioPath();
+        // The microphone's state at the start of a call, as stock
+        setMute(micMute_, [](bool) {});
+    }
     if (audio_)
         audio_(active);
 }
@@ -189,9 +192,19 @@ void Calls::dialEmergency(const std::string &number, uint8_t categories, Done do
               std::move(done));
 }
 
+void Calls::setMicMute(bool mute)
+{
+    if (mute == micMute_)
+        return;
+    micMute_ = mute;
+    if (audioActive_)
+        setMute(mute, [](bool) {});
+}
+
 void Calls::setMute(bool mute, Done done)
 {
     // IpcTxSndSetMute: the framework's value as it is
+    micMute_ = mute;
     ipc_snd_mic_mute_ctrl_data data{};
     data.mute = mute ? 1 : 0;
     modem_.request(IPC_SND_MIC_MUTE_CTRL, IPC_TYPE_SET, data, [done](const Result &r) { done(r.ok); });

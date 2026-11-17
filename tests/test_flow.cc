@@ -546,6 +546,33 @@ TEST(emergency_call_and_mute_as_the_stock_ril_sends_them)
             CHECK(m.type == IPC_TYPE_SET && m.data == Bytes{1});
 }
 
+TEST(mic_mute_from_the_audio_side_as_stock)
+{
+    // Only while a call has audio, and again when one starts
+    Stack s;
+    CHECK(s.booted());
+    auto mutes = [&] {
+        std::vector<Bytes> out;
+        for (auto &m : s.fake.received)
+            if (m.command == IPC_SND_MIC_MUTE_CTRL)
+                out.push_back(m.data);
+        return out;
+    };
+    s.calls.setMicMute(true);
+    s.loop.runUntil([] { return false; }, std::chrono::milliseconds(50));
+    CHECK(mutes().empty());
+    s.calls.setImsAudio(true);
+    CHECK(s.loop.runUntil([&] { return mutes().size() == 1; }));
+    CHECK(mutes()[0] == Bytes{1});
+    s.calls.setMicMute(false);
+    CHECK(s.loop.runUntil([&] { return mutes().size() == 2; }));
+    CHECK(mutes()[1] == Bytes{0});
+    s.calls.setMicMute(false);  // unchanged: nothing sent
+    s.calls.setImsAudio(false);
+    s.loop.runUntil([] { return false; }, std::chrono::milliseconds(50));
+    CHECK(mutes().size() == 2);
+}
+
 TEST(incoming_call_rings_and_is_answered)
 {
     Stack s;

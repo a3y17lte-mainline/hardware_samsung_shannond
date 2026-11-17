@@ -70,6 +70,10 @@ public:
     void setAudioPath(uint8_t path);
     // The call volume, 0 to kMaxCallVolume: the modem sets the level
     void setVolume(uint8_t volume);
+    // The microphone mute of the audio side (Telecom mutes through the
+    // audio HAL), CS and VoLTE calls alike: sent while a call has audio and
+    // again when one starts, as the stock audio HAL does (SecRilSetTxMute)
+    void setMicMute(bool mute);
 
 private:
     void originate(const std::string &number, uint8_t identity, uint8_t subtype, uint8_t category,
@@ -91,6 +95,7 @@ private:
     uint8_t lastEndCauseType_ = 0;
     uint8_t audioPath_ = 0x01;  // handset
     uint8_t volume_ = 4;
+    bool micMute_ = false;
 };
 
 }  // namespace shannond
