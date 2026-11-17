@@ -9,6 +9,8 @@ import android.telephony.ims.stub.ImsFeatureConfiguration;
 import android.telephony.ims.stub.ImsRegistrationImplBase;
 import android.util.Log;
 
+import java.util.concurrent.Executor;
+
 /**
  * The device's ImsService: MMTEL (voice over LTE) on SIM slot 0. The SIP stack
  * runs in the radio HAL; everything here maps Android's IMS API to it.
@@ -31,6 +33,13 @@ public class ShannonImsService extends ImsService {
         mRegistration = new ShannonRegistration(hal);
         mConfig = new ShannonConfig();
         mMmTel = new ShannonMmTelFeature(this, hal, mRegistration);
+    }
+
+    // The framework's calls on the main thread, where the HAL's callbacks
+    // run too: the sessions and the feature share their state unlocked
+    @Override
+    public Executor getExecutor() {
+        return getMainExecutor();
     }
 
     @Override

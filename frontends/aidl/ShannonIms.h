@@ -7,6 +7,7 @@
 // callback, which is oneway: the HAL never waits for the app.
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -50,6 +51,7 @@ class ShannonIms : public ::aidl::vendor::shannond::ims::BnShannonIms {
     std::shared_ptr<Stack> stack_;
     std::mutex mutex_;
     std::shared_ptr<Callback> callback_;
+    std::atomic<bool> enabled_{false};  // the app's switch, also before the core runs
 };
 
 }  // namespace shannond::hal

@@ -35,14 +35,16 @@ void stayAwake(std::chrono::seconds time)
 void Core::imsAwake()
 {
     // A few seconds for a SIP exchange (a registration refresh, a call
-    // coming in); through a call, renewed, since nothing else holds the
-    // system awake for the SIP side of it
-    const bool call = ims.calls().any();
+    // coming in); through a call, and while a request of ours waits for
+    // its answer (the SIP timers stand still in suspend), renewed, since
+    // nothing else holds the system awake for the SIP side of it
+    const auto held = [this] { return ims.calls().any() || (ims.endpoint() && ims.endpoint()->busy()); };
+    const bool call = held();
     stayAwake(std::chrono::seconds(call ? 60 : 5));
     if (call && !wakeTimer_)
-        wakeTimer_ = modem.loop().after(std::chrono::seconds(30), [this] {
+        wakeTimer_ = modem.loop().after(std::chrono::seconds(30), [this, held] {
             wakeTimer_ = 0;
-            if (ims.calls().any())
+            if (held())
                 imsAwake();
         });
 }

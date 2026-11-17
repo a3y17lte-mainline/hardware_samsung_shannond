@@ -101,8 +101,6 @@ final class Hal {
             binder.linkToDeath(mDeath, 0);
             IShannonIms hal = IShannonIms.Stub.asInterface(binder);
             hal.setCallback(mCallback);
-            // The HAL starts with IMS off: the switch is ours
-            hal.setEnabled(mEnabled);
             mHal = hal;
             Log.i(TAG, "connected to " + SERVICE);
         } catch (RemoteException e) {
@@ -110,6 +108,9 @@ final class Hal {
             connect();
             return;
         }
+        // The HAL starts with IMS off: the switch is ours (the HAL keeps it
+        // while its modem is not up yet)
+        setEnabled(mEnabled);
         for (Listener l : new ArrayList<>(mListeners)) l.onConnected();
     }
 

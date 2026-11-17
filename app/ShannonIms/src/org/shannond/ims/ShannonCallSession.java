@@ -106,7 +106,9 @@ final class ShannonCallSession extends ImsCallSessionImplBase {
             mId = hal.dial(hide ? "#31#" + callee : callee);
             mState = State.INITIATED;
             mFeature.track(mId, this);
-            if (mListener != null) mListener.callSessionInitiating(mProfile);
+            // No callSessionInitiating: telephony would drop its pending call
+            // (ImsPhoneCallTracker.onCallInitiating), and with it the silent
+            // redial on CS when this call ends with "retry on CS" before ringing
         } catch (RemoteException | RuntimeException e) {
             // IMS cannot take it: the framework places it on CS
             Log.w(TAG, "dial failed, retry on CS", e);
@@ -135,13 +137,21 @@ final class ShannonCallSession extends ImsCallSessionImplBase {
 
     @Override
     public void accept(int callType, ImsStreamMediaProfile profile) {
-        request("answer", hal -> hal.answer(mId));
+        if (!request("answer", hal -> hal.answer(mId))) failedLocally();
+    }
+
+    /** The HAL did not take a request that ends or answers the call: it is over here */
+    private void failedLocally() {
+        if (mState == State.TERMINATED) return;
+        mState = State.TERMINATED;
+        if (mListener != null)
+            mListener.callSessionTerminated(new ImsReasonInfo(ImsReasonInfo.CODE_UNSPECIFIED, 0));
     }
 
     @Override
     public void reject(int reason) {
         mLocalEnd = true;
-        request("reject", hal -> hal.hangup(mId));
+        if (!request("reject", hal -> hal.hangup(mId))) failedLocally();
     }
 
     @Override
@@ -268,9 +278,10 @@ final class ShannonCallSession extends ImsCallSessionImplBase {
     }
 
     private void ended(Call call) {
+        final boolean told = mState == State.TERMINATED;
         mState = State.TERMINATED;
         mFeature.untrack(mId);
-        ImsCallSessionListener l = mListener;
+        ImsCallSessionListener l = told ? null : mListener;
         // SRVCC: the call goes on as a CS call, which telephony took over
         // when the radio HAL reported the handover
         if (call.handedOver || l == null) return;

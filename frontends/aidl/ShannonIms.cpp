@@ -58,6 +58,8 @@ Call call(const ims::ImsCallInfo &info)
 ShannonIms::ShannonIms(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
 {
     stack_->onReady([this](Core &core) {
+        // The switch as set while the modem was not up
+        core.ims.setEnabled(enabled_);
         core.ims.onChanged([this, &core] {
             if (auto cb = callback())
                 cb->onRegistrationChanged(registration(core));
@@ -92,10 +94,14 @@ std::shared_ptr<ShannonIms::Callback> ShannonIms::callback()
 
 ::ndk::ScopedAStatus ShannonIms::setEnabled(bool enabled)
 {
-    return onCore([enabled](Core &core) {
-        core.ims.setEnabled(enabled);
-        return 0;
+    // Kept first: before the modem is up the core takes it when it is ready
+    // (the service is published earlier than that), never an error
+    enabled_ = enabled;
+    stack_->post([enabled](Core *core) {
+        if (core)
+            core->ims.setEnabled(enabled);
     });
+    return ::ndk::ScopedAStatus::ok();
 }
 
 ::ndk::ScopedAStatus ShannonIms::getRegistration(Registration *_aidl_return)
