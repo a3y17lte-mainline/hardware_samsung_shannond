@@ -40,7 +40,18 @@ add_library(shannond_core STATIC
     core/attach.cc
     core/sat.cc
     core/ss.cc
-    core/text.cc)
+    core/text.cc
+    core/ims/sip.cc
+    core/ims/digest.cc
+    core/ims/secagree.cc
+    core/ims/endpoint.cc
+    core/ims/linux_network.cc
+    core/ims/identity.cc
+    core/ims/profile.cc
+    core/ims/registration.cc
+    core/ims/isim.cc
+    core/ims/ims.cc
+    core/alarm.cc)
 target_include_directories(shannond_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(shannond_core PRIVATE -Wall -Wextra -Werror=return-type)
 target_link_libraries(shannond_core PUBLIC samsung-ipc)
@@ -50,6 +61,8 @@ target_link_libraries(shannond PRIVATE shannond_core)
 
 add_executable(shannond_tests
     sim/fake_modem.cc
+    sim/milenage.cc
+    sim/fake_pcscf.cc
     tests/main.cc
     tests/test_frame.cc
     tests/test_modem.cc
@@ -57,12 +70,28 @@ add_executable(shannond_tests
     tests/test_flow.cc
     tests/test_codec.cc
     tests/test_ss.cc
+    tests/test_sip.cc
+    tests/test_ims.cc
     frontends/aidl/Codec.cpp)
 target_link_libraries(shannond_tests PRIVATE shannond_core)
 target_compile_options(shannond_tests PRIVATE -Wall -Wextra)
 
+# Real IPsec needs a network namespace of its own
+add_executable(shannond_ipsec_tests
+    sim/fake_modem.cc
+    sim/milenage.cc
+    sim/fake_pcscf.cc
+    tests/main.cc
+    tests/test_ipsec.cc)
+target_link_libraries(shannond_ipsec_tests PRIVATE shannond_core)
+target_compile_options(shannond_ipsec_tests PRIVATE -Wall -Wextra)
+
 enable_testing()
 add_test(NAME shannond_tests COMMAND shannond_tests)
+find_program(UNSHARE unshare)
+if(UNSHARE)
+  add_test(NAME shannond_ipsec_tests COMMAND ${UNSHARE} -rn $<TARGET_FILE:shannond_ipsec_tests>)
+endif()
 
 # A syntax check of the AIDL front end on the host, against stand-ins for
 # the NDK headers generated from the frozen radio API (nothing is linked):

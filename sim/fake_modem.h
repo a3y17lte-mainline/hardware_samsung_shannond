@@ -8,13 +8,16 @@
 // against our reading of the protocol, not against the modem itself.
 #pragma once
 
+#include <array>
 #include <functional>
+#include <map>
 #include <set>
 #include <string>
 #include <vector>
 
 #include "core/frame.h"
 #include "core/loop.h"
+#include "sim/milenage.h"
 
 namespace shannond {
 
@@ -34,6 +37,8 @@ public:
     // A second call while one is up: it waits
     void waitingCall(const std::string &number);
     void remoteHangup();
+    // The registration again, as when the cell or its features change
+    void networkChanged();
     // Camped on a GSM cell without registering: no SIM, emergency calls only
     void limitedService();
     // The SIM's state changes (IPC_SEC_PIN_STATUS)
@@ -56,6 +61,18 @@ public:
     std::string barringPassword = "1234";
     // The result of the next SMS sent (0: delivered to the SMSC)
     uint16_t sendResult = 0;
+    // The card's AKA: TS 35.208 test set 1 keys and the highest SQN seen
+    sim::Milenage milenage = testMilenage();
+    sim::Sqn sqnMs{};
+    // Files of the card's applications, by file id: transparent ones and
+    // linear fixed ones (records of one length). Others read as "abc".
+    std::map<uint16_t, Bytes> simBinary;
+    std::map<uint16_t, std::vector<Bytes>> simRecords;
+    // What the LTE cell says about voice over PS
+    bool volteSupported = true;
+    // The IPv4 P-CSCF every data call gets
+    std::array<uint8_t, 4> pcscf4{10, 0, 0, 80};
+    static sim::Milenage testMilenage();
 
     size_t count(uint16_t command) const;
 

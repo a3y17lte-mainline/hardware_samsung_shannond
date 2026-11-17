@@ -6,7 +6,10 @@
 // the SIM in the phone is the user's own.
 //
 //   shannond [--nv FILE] [--nv-size N] [--socket PATH] [--apn APN]
-//          [--audio-hook PATH] [--radio-off]
+//          [--audio-hook PATH] [--radio-off] [--ims-ignore-vops]
+//
+// VoLTE starts only with "ims on": it brings up the IMS PDN and registers
+// with the network as the SIM's subscriber.
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -26,6 +29,8 @@
 
 #include "core/call.h"
 #include "core/data.h"
+#include "core/ims/ims.h"
+#include "core/ims/linux_network.h"
 #include "core/network.h"
 #include "core/nv.h"
 #include "core/ports.h"
@@ -43,7 +48,16 @@ struct Options {
     std::string apn;
     std::string audioHook = "/usr/libexec/samsungipcd/voicecall.sh";
     bool radio = true;
+    bool imsIgnoreVops = false;
 };
+
+ims::Ims::Options imsOptions(const Options &options)
+{
+    ims::Ims::Options o;
+    o.ownPdn = true;  // nobody else brings up the IMS PDN on Linux
+    o.ignoreVops = options.imsIgnoreVops;
+    return o;
+}
 
 void logLine(const std::string &line)
 {
@@ -143,7 +157,10 @@ public:
         : loop_(loop), options_(options), modem_(loop, fmt, rfs), nv_(options.nv, options.nvSize),
           rfs_(modem_, nv_), sim_(modem_), network_(modem_),
           data_(modem_, DataLinks::wwan(wwan)), sms_(modem_), calls_(modem_),
-          hook_(options.audioHook)
+          hook_(options.audioHook),
+          ims_(modem_, sim_, network_, data_,
+               [](const DataCall &pdn) { return std::make_unique<ims::LinuxImsNetwork>(pdn.iface); },
+               imsOptions(options))
     {
         modem_.setLog(logLine);
         modem_.onClosed([this] {
@@ -187,6 +204,13 @@ public:
         });
         data_.onChanged([this](const DataCall &c) {
             event("data " + std::to_string(c.cid) + (c.active ? " up " + c.iface : " down"));
+        });
+        ims_.onChanged([this] {
+            std::string line = "ims " + ims_.status();
+            if (line != lastIms_) {
+                lastIms_ = line;
+                event(line);
+            }
         });
 
         if (!nv_.valid())
@@ -256,7 +280,7 @@ private:
             reply(fd, "status | radio on|off | data connect CID APN [ims] | data disconnect CID | "
                       "data list | sms send TPDU-HEX | call dial NUMBER | call answer | "
                       "call hangup | call list | dtmf TONE | sim apps | sim auth RAND AUTN | "
-                      "sim apdu HEX | quit");
+                      "sim apdu HEX | ims on|off|status | quit");
         } else if (cmd == "status") {
             reply(fd, "sim " + std::string(simStateName(sim_.state())) + ", data " +
                           regStateName(network_.data().state) + " on " +
@@ -357,6 +381,11 @@ private:
             loop_.unwatch(fd);
             close(fd);
             clients_.erase(fd);
+        } else if (cmd == "ims" && (arg1 == "on" || arg1 == "off")) {
+            ims_.setEnabled(arg1 == "on");
+            reply(fd, "ok ims " + ims_.status());
+        } else if (cmd == "ims" && (arg1 == "status" || arg1.empty())) {
+            reply(fd, "ims " + ims_.status());
         } else {
             reply(fd, "error unknown command: " + line);
         }
@@ -373,8 +402,10 @@ private:
     Sms sms_;
     Calls calls_;
     AudioHook hook_;
+    ims::Ims ims_;
     std::map<int, std::string> clients_;
     std::string lastReg_;
+    std::string lastIms_;
 };
 
 int listenSocket(const std::string &path)
@@ -406,6 +437,7 @@ int main(int argc, char **argv)
         {"apn", required_argument, nullptr, 'a'},
         {"audio-hook", required_argument, nullptr, 'h'},
         {"radio-off", no_argument, nullptr, 'r'},
+        {"ims-ignore-vops", no_argument, nullptr, 'v'},
         {},
     };
     int c;
@@ -417,9 +449,10 @@ int main(int argc, char **argv)
         case 'a': options.apn = optarg; break;
         case 'h': options.audioHook = optarg; break;
         case 'r': options.radio = false; break;
+        case 'v': options.imsIgnoreVops = true; break;
         default:
             std::fprintf(stderr, "usage: shannond [--nv FILE] [--nv-size N] [--socket PATH] "
-                                 "[--apn APN] [--audio-hook PATH] [--radio-off]\n");
+                                 "[--apn APN] [--audio-hook PATH] [--radio-off] [--ims-ignore-vops]\n");
             return 2;
         }
     }

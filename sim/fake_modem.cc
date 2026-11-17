@@ -96,15 +96,33 @@ void FakeModem::boot()
     sendRegistration(1, 0);  // LTE: one record for both domains
 }
 
+sim::Milenage FakeModem::testMilenage()
+{
+    sim::Milenage m;
+    m.k = {0x46, 0x5b, 0x5c, 0xe8, 0xb1, 0x99, 0xb4, 0x9f, 0xaa, 0x5f, 0x0a, 0x2e, 0xe2, 0x38, 0xa6, 0xbc};
+    m.opc = {0xcd, 0x63, 0xcb, 0x71, 0x95, 0x4a, 0x9f, 0x4e, 0x48, 0xa5, 0x99, 0x4e, 0x37, 0xa0, 0x2b, 0xaf};
+    return m;
+}
+
 void FakeModem::sendRegistration(uint8_t domain, uint8_t aseq)
 {
-    ipc_net_regist_response_data reg{};
+    ipc_net_regist_response_ext_data reg{};
     reg.act = kRawTechLte;
     reg.domain = domain;
     reg.status = IPC_NET_REGISTRATION_STATUS_HOME;
     reg.lac = 0x1234;
     reg.cid = 0x0abcdef;
+    reg.tac = 0x5678;
+    reg.volte = volteSupported ? IPC_NET_LTE_SUPPORTED : IPC_NET_LTE_NOT_SUPPORTED;
+    reg.ims_emergency = IPC_NET_LTE_NOT_SUPPORTED;
+    reg.pci = 301;
     send(IPC_NET_REGIST, aseq ? IPC_TYPE_RESP : IPC_TYPE_NOTI, toBytes(reg), aseq);
+}
+
+void FakeModem::networkChanged()
+{
+    sendRegistration(IPC_NET_SERVICE_DOMAIN_GSM, 0);
+    sendRegistration(IPC_NET_SERVICE_DOMAIN_GPRS, 0);
 }
 
 void FakeModem::limitedService()
@@ -410,8 +428,51 @@ void FakeModem::handle(const Message &r)
         return;
     }
     case IPC_SEC_RSIM_ACCESS: {
-        Bytes data{0x90, 0x00, 3, 'a', 'b', 'c'};
-        respond(r, data);
+        auto h = r.as<ipc_sec_rsim_aid_request_header>();
+        auto answer = [&](uint8_t sw1, uint8_t sw2, const Bytes &body) {
+            Bytes data{sw1, sw2, static_cast<uint8_t>(body.size())};
+            data.insert(data.end(), body.begin(), body.end());
+            respond(r, data);
+        };
+        const uint16_t fileId = h ? uint16_t(h->file_id) : 0;  // packed: copied before use
+        const bool binary = h && simBinary.count(fileId);
+        const bool records = h && simRecords.count(fileId);
+        if (!binary && !records) {
+            answer(0x90, 0x00, Bytes{'a', 'b', 'c'});
+            return;
+        }
+        if (h->command == IPC_SEC_RSIM_COMMAND_GET_RESPONSE) {
+            // FCP: descriptor, file id, size or record length and count
+            Bytes fcp{0x62, 0};
+            if (binary) {
+                size_t n = simBinary[fileId].size();
+                fcp.insert(fcp.end(), {0x82, 0x02, 0x41, 0x21, 0x80, 0x02, uint8_t(n >> 8), uint8_t(n)});
+            } else {
+                const auto &recs = simRecords[fileId];
+                uint8_t length = recs.empty() ? 0 : static_cast<uint8_t>(recs[0].size());
+                fcp.insert(fcp.end(), {0x82, 0x05, 0x42, 0x21, 0x00, length, uint8_t(recs.size())});
+            }
+            fcp[1] = static_cast<uint8_t>(fcp.size() - 2);
+            answer(0x90, 0x00, fcp);
+            return;
+        }
+        if (h->command == IPC_SEC_RSIM_COMMAND_READ_BINARY && binary) {
+            const Bytes &f = simBinary[fileId];
+            size_t offset = h->p1 << 8 | h->p2;
+            size_t n = std::min<size_t>(h->p3, offset < f.size() ? f.size() - offset : 0);
+            answer(0x90, 0x00, Bytes(f.begin() + std::min(offset, f.size()), f.begin() + std::min(offset, f.size()) + n));
+            return;
+        }
+        if (h->command == IPC_SEC_RSIM_COMMAND_READ_RECORD && records) {
+            const auto &recs = simRecords[fileId];
+            if (h->p1 == 0 || h->p1 > recs.size()) {
+                answer(0x6a, 0x83, {});  // record not found
+                return;
+            }
+            answer(0x90, 0x00, recs[h->p1 - 1]);
+            return;
+        }
+        answer(0x6a, 0x82, {});  // file not found
         return;
     }
     case IPC_SEC_GSIM_ACCESS: {
@@ -420,11 +481,23 @@ void FakeModem::handle(const Message &r)
         return;
     }
     case IPC_SEC_IMS_AUTH: {
-        Bytes data{0, 0};
-        for (uint8_t len : {8, 16, 16}) {
-            data.push_back(len);
-            data.insert(data.end(), len, len);
+        // type, RAND and AUTN with a length byte each
+        const Bytes &q = r.data;
+        if (q.size() < 2 + 16 + 1 + 16 || q[1] != 16 || q[18] != 16) {
+            respond(r, Bytes{q.empty() ? uint8_t(0) : q[0], 2});
+            return;
         }
+        sim::Block rand, autn;
+        std::copy_n(q.begin() + 2, 16, rand.begin());
+        std::copy_n(q.begin() + 19, 16, autn.begin());
+        auto result = sim::cardAuthenticate(milenage, sqnMs, rand, autn);
+        Bytes data{q[0], result.status};
+        for (const Bytes &v : result.values) {
+            data.push_back(static_cast<uint8_t>(v.size()));
+            data.insert(data.end(), v.begin(), v.end());
+        }
+        if (result.status == 4)  // as the stock RIL reads it: two empty values after AUTS
+            data.insert(data.end(), {0, 0});
         respond(r, data);
         return;
     }
@@ -549,8 +622,7 @@ void FakeModem::handle(const Message &r)
         std::memcpy(&ip[0x03], addr, 4);
         const uint8_t dns[] = {10, 0, 0, 53};
         std::memcpy(&ip[0x07], dns, 4);
-        const uint8_t pcscf[] = {10, 0, 0, 80};
-        std::memcpy(&ip[0x17], pcscf, 4);
+        std::memcpy(&ip[0x17], pcscf4.data(), 4);
         ip[0x23] = 0xfe;
         ip[0x24] = 0x80;
         ip[0x2b] = 0x42;  // interface id

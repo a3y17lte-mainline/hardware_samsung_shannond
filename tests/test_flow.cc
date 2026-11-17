@@ -56,6 +56,8 @@ TEST(boot_brings_sim_registration_and_identities)
     CHECK(s.sim.iccid().rfind("8923010", 0) == 0);
     CHECK(s.network.data().tech == AccessTech::Lte);
     CHECK(s.network.voice().state == RegState::Home);
+    CHECK(s.network.data().volte == true && s.network.data().imsEmergency == false);
+    CHECK(s.network.data().tac == 0x5678 && s.network.data().pci == 301);
     CHECK(s.loop.runUntil([&] { return s.network.operatorCode() == "23002"; }));
     CHECK(s.loop.runUntil([&] { return s.network.operatorLongName() == "O2.CZ"; }));
     CHECK(s.network.operatorShortName() == "O2.CZ");
@@ -616,12 +618,28 @@ TEST(sim_services_for_ims)
     CHECK(s.booted());
 
     std::optional<SimAuthResult> auth;
-    s.sim.authenticate(0, Bytes(16, 1), Bytes(16, 2), [&](std::optional<SimAuthResult> r) {
+    sim::Sqn sqn{0, 0, 0, 0, 0, 0x20};
+    sim::Block rand{};
+    rand.fill(1);
+    auto vector = sim::makeVector(s.fake.milenage, rand, sqn, {0x80, 0x00});
+    s.sim.authenticate(0, Bytes(vector.rand.begin(), vector.rand.end()),
+                       Bytes(vector.autn.begin(), vector.autn.end()), [&](std::optional<SimAuthResult> r) {
         if (r)
             auth = r;
     });
     CHECK(s.loop.runUntil([&] { return auth.has_value(); }));
     CHECK(auth->status == 0 && auth->values.size() == 3 && auth->values[0].size() == 8);
+    CHECK(auth->values[0] == Bytes(vector.xres.begin(), vector.xres.end()));
+    CHECK(auth->values[2] == Bytes(vector.ik.begin(), vector.ik.end()));
+    // The same SQN again: the card asks to resynchronise
+    auth.reset();
+    s.sim.authenticate(0, Bytes(vector.rand.begin(), vector.rand.end()),
+                       Bytes(vector.autn.begin(), vector.autn.end()), [&](std::optional<SimAuthResult> r) {
+                           if (r)
+                               auth = r;
+                       });
+    CHECK(s.loop.runUntil([&] { return auth.has_value(); }));
+    CHECK(auth->status == 4 && !auth->values.empty() && auth->values[0].size() == 14);
 
     std::optional<SimIoResult> io;
     const SimApp isim = s.sim.apps()[1];
