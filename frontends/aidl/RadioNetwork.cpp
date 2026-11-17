@@ -253,12 +253,34 @@ RadioNetwork::RadioNetwork(std::shared_ptr<Stack> stack) : stack_(std::move(stac
                 i->suppSvcNotify(kUnsolicited, out);
         });
         core.network.onChanged([this, &core] {
-            // Registration, operator and signal all arrive here; the framework
-            // polls the state after networkStateChanged
-            if (auto i = indication()) {
+            // Registration, operator and signal all arrive here. The framework
+            // polls operator, voice and data registration after each
+            // networkStateChanged, so it goes out only when one of those
+            // changed, as the stock RIL sends it; signal on its own
+            auto i = indication();
+            if (!i)
+                return;
+            const Network &n = core.network;
+            auto reg = [](const shannond::Registration &r) {
+                return std::to_string(static_cast<int>(r.state)) + "," + std::to_string(static_cast<int>(r.tech)) +
+                       "," + std::to_string(r.area) + "," + std::to_string(r.cell) + "," +
+                       std::to_string(r.rejectCause) + "," + std::to_string(r.tac) + "," + std::to_string(r.pci);
+            };
+            std::string state = reg(n.voice()) + "|" + reg(n.data()) + "|" + n.operatorCode() + "|" +
+                                n.operatorLongName() + "|" + n.operatorShortName() + "|" +
+                                (n.radioOn() ? "on" : "off");
+            if (state != lastState_) {
+                lastState_ = std::move(state);
                 i->networkStateChanged(kUnsolicited);
-                if (indicationFilter_ & static_cast<int32_t>(network::IndicationFilter::SIGNAL_STRENGTH))
-                    i->currentSignalStrength(kUnsolicited, signalStrength(core.network));
+            }
+            const auto &l = n.lteSignal();
+            auto opt = [](const std::optional<int> &v) { return v ? std::to_string(*v) : std::string("-"); };
+            std::string signal = std::to_string(n.signal()) + "," + opt(l.strength) + "," + opt(l.rsrp) + "," +
+                                 opt(l.rsrq) + "," + opt(l.snr) + "," + opt(l.cqi);
+            if (signal != lastSignal_ &&
+                (indicationFilter_ & static_cast<int32_t>(network::IndicationFilter::SIGNAL_STRENGTH))) {
+                lastSignal_ = std::move(signal);
+                i->currentSignalStrength(kUnsolicited, signalStrength(n));
             }
         });
     });
@@ -468,7 +490,8 @@ RadioNetwork::RadioNetwork(std::shared_ptr<Stack> stack) : stack_(std::move(stac
     indicationFilter_ = indicationFilter;
     const bool screenOn =
             indicationFilter & static_cast<int32_t>(network::IndicationFilter::SIGNAL_STRENGTH);
-    stack_->post([screenOn](Core *core) {
+    stack_->post([this, screenOn](Core *core) {
+        lastSignal_.clear();  // the next report goes out even if unchanged
         if (core)
             core->network.setScreenOn(screenOn);
     });

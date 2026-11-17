@@ -145,6 +145,10 @@ class RadioNetwork : public NotSupportedNetwork {
     std::shared_ptr<Stack> stack_;
     std::atomic<int32_t> indicationFilter_{-1};  // IndicationFilter::ALL
     std::atomic<bool> suppServiceNotifications_{false};
+    // What the last indications said, so that only changes go out (the
+    // core thread only)
+    std::string lastState_;
+    std::string lastSignal_;
 };
 
 class RadioData : public NotSupportedData {
