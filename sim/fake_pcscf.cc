@@ -20,6 +20,8 @@ using namespace ims;
 
 namespace {
 
+constexpr const char *kDefaultImpu = "sip:+420600000001@ims.mnc002.mcc230.3gppnetwork.org";
+
 bool sockaddrFor(const std::string &ip, uint16_t port, sockaddr_storage &ss, socklen_t &length)
 {
     ss = {};
@@ -283,6 +285,7 @@ void FakePcscf::challenge(const SipMessage &m, int fd, const Endpoint &to, bool 
     // The UE's offer (any entry: they share SPIs and ports)
     if (auto client = m.header("Security-Client")) {
         if (auto offer = SecurityMechanism::parse(*client)) {
+            lastOfferSpiC = offer->spiC;
             SaSet ue;
             ue.ue = to.ip.empty() ? ueServer.ip : to.ip;
             ue.pcscf = address_;
@@ -367,6 +370,15 @@ void FakePcscf::handle(const SipMessage &m, int fd, const Endpoint &from)
             sendTo(fd, to, m.makeResponse(403, "Forbidden"));
             return;
         }
+        // 33.203: the protected REGISTER repeats the Security-Client the
+        // SAs were made from
+        auto client = SecurityMechanism::parse(m.header("Security-Client").value_or(""));
+        if (!client || (lastOfferSpiC && client->spiC != lastOfferSpiC && !refresh)) {
+            SipMessage bad = m.makeResponse(400, "Bad Request");
+            bad.add("Warning", "399 pcscf \"Security-Client missing or changed\"");
+            sendTo(fd, to, bad);
+            return;
+        }
         lastSecurityVerify = m.header("Security-Verify").value_or("");
         // Over TCP the stack reads the list joined
         if (lastSecurityVerify.empty() == false && m.headers("Security-Verify").size() > 1) {
@@ -385,12 +397,17 @@ void FakePcscf::handle(const SipMessage &m, int fd, const Endpoint &from)
             if (contact)
                 r.add("Contact", "<" + contact->uri + ">;expires=" + std::to_string(grantExpires));
             r.add("Service-Route", "<sip:orig@scscf.ims.example;lr>");
-            r.add("P-Associated-URI", "<" + impu_ + ">, <tel:+420600000001>");
+            r.add("P-Associated-URI", std::string("<") + kDefaultImpu + ">, <" + impu_ + ">, <tel:+420600000001>");
         }
         sendTo(fd, to, r);
         return;
     }
     if (m.method() == "SUBSCRIBE") {
+        // The IMSI-derived identity is barred outside REGISTER
+        if (m.header("From").value_or("").find("<" + impu_ + ">") == 0) {
+            sendTo(fd, to, m.makeResponse(403, "Forbidden - barred identity"));
+            return;
+        }
         subCallId_ = m.callId().value_or("");
         if (auto f = NameAddr::parse(m.header("From").value_or("")))
             subFromTag_ = f->params.get("tag").value_or("");
@@ -417,8 +434,8 @@ void FakePcscf::terminateRegistration()
     via.port = portC;
     via.params.set("branch", newBranch());
     n.add("Via", via.str());
-    n.add("From", "<" + impu_ + ">;tag=" + subToTag_);
-    n.add("To", "<" + impu_ + ">;tag=" + subFromTag_);
+    n.add("From", "<" + std::string(kDefaultImpu) + ">;tag=" + subToTag_);
+    n.add("To", "<" + std::string(kDefaultImpu) + ">;tag=" + subFromTag_);
     n.add("Call-ID", subCallId_);
     n.add("CSeq", std::to_string(++notifyCseq_) + " NOTIFY");
     n.add("Event", "reg");
@@ -426,7 +443,7 @@ void FakePcscf::terminateRegistration()
     n.add("Content-Type", "application/reginfo+xml");
     n.body = "<?xml version=\"1.0\"?><reginfo xmlns=\"urn:ietf:params:xml:ns:reginfo\" version=\"1\" "
              "state=\"partial\"><registration aor=\"" +
-             impu_ + "\" id=\"r1\" state=\"terminated\"><contact id=\"c1\" state=\"terminated\" "
+             std::string(kDefaultImpu) + "\" id=\"r1\" state=\"terminated\"><contact id=\"c1\" state=\"terminated\" "
                      "event=\"deactivated\"><uri>" +
              subContact_ + "</uri></contact></registration></reginfo>";
     sendTo(protectedC_, ueServer, n);

@@ -473,8 +473,11 @@ bool SipEndpoint::transmit(const std::string &data, const Route &route, int conn
     socklen_t length;
     if (fd < 0 || !toSockaddr(route.to, ss, length))
         return false;
-    return sendto(fd, data.data(), data.size(), 0, reinterpret_cast<sockaddr *>(&ss), length) ==
-           static_cast<ssize_t>(data.size());
+    if (sendto(fd, data.data(), data.size(), 0, reinterpret_cast<sockaddr *>(&ss), length) ==
+        static_cast<ssize_t>(data.size()))
+        return true;
+    log(std::string("SIP: sendto: ") + strerror(errno));
+    return false;
 }
 
 std::string SipEndpoint::send(SipMessage request, const Route &route, ResponseHandler handler)

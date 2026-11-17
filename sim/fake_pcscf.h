@@ -102,6 +102,7 @@ private:
     std::string subCallId_, subFromTag_, subToTag_, subContact_;
     unsigned notifyCseq_ = 0;
     std::string impu_;
+    uint32_t lastOfferSpiC = 0;  // spi-c of the challenged request's offer
 };
 
 }  // namespace shannond::sim

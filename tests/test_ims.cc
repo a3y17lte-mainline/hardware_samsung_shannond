@@ -147,7 +147,9 @@ TEST(ims_register_and_deregister)
     // Stock SPIs: spi-c in [100, 100099], spi-s = spi-c + 1
     CHECK(s.spiUc >= 100 && s.spiUc < 100100 && s.spiUs == s.spiUc + 1);
     CHECK(s.alg == "hmac-md5-96" && s.integrityKey.size() == 16 && s.encryptionKey.empty());
-    CHECK(b.net.protectedSockets == 3);  // client UDP, server UDP, server TCP
+    // client UDP, server UDP, server TCP, and a TCP client connection if
+    // a request was too long for UDP
+    CHECK(b.net.protectedSockets >= 3);
     CHECK(b.net.reserved.empty());
     // Security-Verify repeats the P-CSCF's Security-Server
     CHECK(b.pcscf.lastSecurityVerify.find("spi-c=20480") != std::string::npos);
@@ -162,7 +164,10 @@ TEST(ims_register_and_deregister)
     CHECK(b.pcscf.lastContact.find("icsi.mmtel") != std::string::npos);
 
     const auto &info = b.reg.info();
-    CHECK(info.expires == 3600 && info.serviceRoute.size() == 1 && info.associatedUris.size() == 2);
+    CHECK(info.expires == 3600 && info.serviceRoute.size() == 1 && info.associatedUris.size() == 3);
+    // After registration the first associated URI speaks for us, not the
+    // IMSI-derived identity (barred by the fake network, as by O2)
+    CHECK(info.defaultImpu == "sip:+420600000001@ims.mnc002.mcc230.3gppnetwork.org");
     // The protected REGISTER carried the cell; the unprotected one did not
     bool sawPani = false, plainPani = false;
     for (const auto &m : b.pcscf.requests)
@@ -170,6 +175,14 @@ TEST(ims_register_and_deregister)
             (m.has("Security-Verify") ? sawPani : plainPani) = true;
     CHECK(sawPani && !plainPani);
     CHECK(b.loop.runUntil([&] { return b.count("SUBSCRIBE") == 1; }));
+    // Its route: the P-CSCF's protected port first, then the Service-Route
+    for (const auto &m : b.pcscf.requests)
+        if (m.method() == "SUBSCRIBE") {
+            auto routes = m.headers("Route");
+            CHECK(routes.size() == 2);
+            CHECK(routes[0] == "<sip:127.0.0.2:" + std::to_string(b.pcscf.portS) + ";lr>");
+            CHECK(routes[1] == "<sip:orig@scscf.ims.example;lr>");
+        }
 
     bool stopped = false;
     b.reg.stop([&] { stopped = true; });
@@ -362,4 +375,46 @@ TEST(ims_brings_up_pdn_registers_and_tells_the_modem)
     CHECK(pcscf.deregistered == 1);
     CHECK(net == nullptr || ims.endpoint() == nullptr);
     CHECK(ims.status().find("no voice over PS") != std::string::npos);
+}
+
+TEST(ims_registers_on_a_card_without_isim)
+{
+    EventLoop loop;
+    FakeModem fake{loop};
+    fake.hasIsim = false;
+    Modem modem{loop, fake.fmtFd(), fake.rfsFd()};
+    Sim sim{modem};
+    Network network{modem};
+    Data data{modem, DataLinks::none()};
+    sim::FakePcscf pcscf{loop, "127.0.0.2", kPcscfPort};
+    fake.pcscf4 = {127, 0, 0, 2};
+    fake.simBinary[0x6fad] = Bytes{0, 0, 0, 2};  // EF_AD: two digit MNC
+
+    Ims::Options o;
+    o.profile = defaultProfile();
+    o.profile->pcscfPort = kPcscfPort;
+    o.profile->localPort = 0;
+    o.profile->portBase = 45000;
+    o.profile->timers.t1 = std::chrono::milliseconds(10);
+    Ims ims(modem, sim, network, data,
+            [](const DataCall &) { return std::make_unique<sim::FakeImsNetwork>("127.0.0.1"); }, o);
+    fake.boot();
+    CHECK(loop.runUntil([&] {
+        return sim.state() == SimState::Ready && network.data().volte == true && !sim.apps().empty();
+    }));
+    CHECK(sim.apps().size() == 1);
+    ims.setEnabled(true);
+    CHECK(loop.runUntil([&] { return ims.registered(); }));
+
+    // The identity from the IMSI, AKA on the USIM
+    bool imsiIdentity = false;
+    for (const auto &m : pcscf.requests)
+        if (m.method() == "REGISTER")
+            imsiIdentity = m.header("From")->find("<sip:230020000000001@ims.mnc002.mcc230.3gppnetwork.org>") == 0;
+    CHECK(imsiIdentity);
+    bool usim = false;
+    for (const auto &m : fake.received)
+        if (m.command == IPC_SEC_IMS_AUTH && !m.data.empty())
+            usim = m.data[0] == IPC_SEC_IMS_AUTH_TYPE_USIM;
+    CHECK(usim);
 }

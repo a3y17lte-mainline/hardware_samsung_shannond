@@ -240,10 +240,15 @@ void ImsRegistration::sendRegister(bool protectedFlow, unsigned expires)
     }
     r.add("Allow", kAllow);
     r.add("Authorization", authorization("REGISTER", uri));
-    if (profile.ipsec && reservedUc_ && expires)
+    // Security-Client in every REGISTER (33.203 7.2, 24.229 5.1.1.2): a new
+    // offer while SPIs are reserved (initial, refresh), else the one the
+    // SAs in use came from, repeated unchanged
+    const uint32_t offerUc = reservedUc_ ? reservedUc_ : (sas_ ? sas_->spiUc : 0);
+    const uint32_t offerUs = reservedUc_ ? reservedUs_ : (sas_ ? sas_->spiUs : 0);
+    if (profile.ipsec && offerUc)
         r.add("Security-Client", [&] {
             std::vector<std::string> offers;
-            for (const auto &m : clientOffers(profile.algorithms, reservedUc_, reservedUs_, portUc_, portUs_))
+            for (const auto &m : clientOffers(profile.algorithms, offerUc, offerUs, portUc_, portUs_))
                 offers.push_back(m.str());
             return join(offers);
         }());
@@ -310,7 +315,10 @@ void ImsRegistration::registerAnswered(const SipMessage *response, bool protecte
     if (auto ra = response->header("Retry-After"))
         if (auto v = number(ra->substr(0, ra->find(';'))))
             retryAfter = std::chrono::seconds(*v);
-    failed(std::to_string(status) + " " + response->reason(), true, retryAfter);
+    std::string why = std::to_string(status) + " " + response->reason();
+    if (auto warning = response->header("Warning"))
+        why += " (" + *warning + ")";
+    failed(why, true, retryAfter);
 }
 
 void ImsRegistration::challenged(const SipMessage &response, bool protectedFlow)
@@ -406,7 +414,9 @@ void ImsRegistration::akaAnswered(AkaAnswer answer, unsigned expires)
     s.integrityKey = integrityKey(s.alg, answer.ik);
     s.encryptionKey = encryptionKey(s.ealg, answer.ck);
     if (s.integrityKey.empty() || (s.ealg != "null" && s.encryptionKey.empty())) {
-        failed("bad keys from the SIM", true);
+        failed("bad keys from the SIM (IK " + std::to_string(answer.ik.size()) + ", CK " +
+                   std::to_string(answer.ck.size()) + " bytes; " + s.alg + "/" + s.ealg + ")",
+               true);
         return;
     }
     if (!network_.installSas(s)) {
@@ -427,6 +437,17 @@ void ImsRegistration::registered(const SipMessage &response)
 {
     info_.serviceRoute = response.headers("Service-Route");
     info_.associatedUris = response.headers("P-Associated-URI");
+    info_.defaultImpu = params_.identity.impu();
+    if (!info_.associatedUris.empty())
+        if (auto first = NameAddr::parse(info_.associatedUris.front()))
+            info_.defaultImpu = first->uri;
+    {
+        std::string schemes;  // no identities in the log
+        for (const auto &a : info_.associatedUris)
+            if (auto n = NameAddr::parse(a))
+                schemes += (schemes.empty() ? "" : ", ") + n->uri.substr(0, n->uri.find(':'));
+        log("associated identities: " + (schemes.empty() ? std::string("none") : schemes));
+    }
     unsigned expires = expires_;
     if (auto e = response.header("Expires"))
         if (auto v = number(*e))
@@ -551,6 +572,16 @@ Route ImsRegistration::route() const
 
 void ImsRegistration::decorate(SipMessage &request) const
 {
+    // 24.229 5.1.2A.1.1: the preloaded route is the P-CSCF (its protected
+    // server port), then the Service-Route the registration gave
+    if (sas_) {
+        Uri pcscf;
+        pcscf.scheme = "sip";
+        pcscf.host = info_.pcscf;
+        pcscf.port = sas_->portPs;
+        pcscf.params.set("lr");
+        request.add("Route", "<" + pcscf.str() + ">");
+    }
     for (const auto &r : info_.serviceRoute)
         request.add("Route", r);
     if (params_.accessNetworkInfo) {
@@ -564,30 +595,33 @@ void ImsRegistration::decorate(SipMessage &request) const
 
 void ImsRegistration::subscribe()
 {
-    const auto &id = params_.identity;
+    const std::string &impu = info_.defaultImpu;
     subCallId_ = randomHex(24);
     subFromTag_ = randomHex(10);
     subToTag_.clear();
     subCseq_ = 0;
-    SipMessage s = SipMessage::request("SUBSCRIBE", id.impu());
+    SipMessage s = SipMessage::request("SUBSCRIBE", impu);
     s.add("Max-Forwards", "70");
     decorate(s);
-    s.add("From", "<" + id.impu() + ">;tag=" + subFromTag_);
-    s.add("To", "<" + id.impu() + ">");
+    s.add("From", "<" + impu + ">;tag=" + subFromTag_);
+    s.add("To", "<" + impu + ">");
     s.add("Call-ID", subCallId_);
     s.add("CSeq", std::to_string(++subCseq_) + " SUBSCRIBE");
     s.add("Contact", "<" + contactUri() + ">");
     s.add("Event", "reg");
     s.add("Accept", "application/reginfo+xml");
     s.add("Expires", std::to_string(expires_));
-    s.add("P-Preferred-Identity", "<" + id.impu() + ">");
+    s.add("P-Preferred-Identity", "<" + impu + ">");
     auto alive = alive_;
     endpoint_.send(std::move(s), route(), [this, alive](const SipMessage *m) {
         if (!*alive || (m && m->status() < 200))
             return;
         if (!m || m->status() >= 300) {
-            log(std::string("reg event subscription failed") +
-                (m ? ": " + std::to_string(m->status()) : ""));
+            std::string why = m ? ": " + std::to_string(m->status()) + " " + m->reason() : "";
+            if (m)
+                if (auto warning = m->header("Warning"))
+                    why += " (" + *warning + ")";
+            log("reg event subscription failed" + why);
             return;
         }
         if (auto to = m->header("To"))
@@ -604,10 +638,11 @@ bool ImsRegistration::handleRequest(const SipMessage &request, const Source &sou
     // A registration of our IMPU that the network ended (24.229 5.1.1.6):
     // register again from the start
     const std::string &body = request.body;
-    const std::string &impu = params_.identity.impu();
     for (size_t pos = body.find("<registration"); pos != std::string::npos;
          pos = body.find("<registration", pos + 1)) {
-        if (xmlAttribute(body, pos, "aor") == impu && xmlAttribute(body, pos, "state") == "terminated" &&
+        const std::string aor = xmlAttribute(body, pos, "aor");
+        if ((aor == params_.identity.impu() || aor == info_.defaultImpu) &&
+            xmlAttribute(body, pos, "state") == "terminated" &&
             state_ == RegistrationState::Registered) {
             log("the network ended the registration");
             subCallId_.clear();

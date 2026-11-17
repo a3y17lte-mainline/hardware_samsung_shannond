@@ -397,7 +397,14 @@ std::string Ims::accessNetworkInfo() const
 
 void Ims::authenticate(const Bytes &rand, const Bytes &autn, std::function<void(AkaAnswer)> done)
 {
-    sim_.authenticate(0, rand, autn, [done](std::optional<SimAuthResult> r) {
+    // On the ISIM if the card has one, else on the USIM (33.203 6.1)
+    sim_.authenticate(sim_.akaType(), rand, autn, [this, done](std::optional<SimAuthResult> r) {
+        // Lengths only: the values are keys
+        std::string shape = r ? "status " + std::to_string(r->status) + ", lengths" : "no answer";
+        if (r)
+            for (const auto &v : r->values)
+                shape += " " + std::to_string(v.size());
+        log("AKA answer from the SIM: " + shape);
         AkaAnswer a;
         if (r && r->status == 0 && r->values.size() >= 3) {
             a.kind = AkaAnswer::Kind::Ok;

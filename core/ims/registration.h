@@ -45,6 +45,9 @@ struct RegistrationInfo {
     std::string pcscf;
     std::vector<std::string> serviceRoute;
     std::vector<std::string> associatedUris;  // the IMPUs the network allows
+    // The identity for every request but REGISTER: the first associated URI
+    // (24.229 5.1.1.2; a temporary IMPU derived from the IMSI is barred)
+    std::string defaultImpu;
     std::string contact;  // our Contact (name-addr with the feature tags)
     unsigned expires = 0;
 };
