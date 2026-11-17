@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// The ImsService for the radio HAL's own IMS stack: Android's MMTEL
+// feature over the private vendor.shannond.ims interface. No SIP, no
+// sockets, no network permissions: those live in the HAL.
+
+android_app {
+    name: "ShannonIms",
+    srcs: ["src/**/*.java"],
+    platform_apis: true,
+    certificate: "platform",
+    privileged: true,
+    system_ext_specific: true,
+    static_libs: ["vendor.shannond.ims-V1-java"],
+    optimize: {
+        enabled: false,
+    },
+}

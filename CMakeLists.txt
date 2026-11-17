@@ -117,6 +117,15 @@ if(SHANNOND_AIDL_API)
       USES_TERMINAL)
 endif()
 
+# The same for the ShannonIms app (Java): "ninja ims_app_check"
+find_program(JAVAC javac)
+if(JAVAC)
+  add_custom_target(ims_app_check
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/app/ShannonIms/hostcheck/check.sh
+              ${CMAKE_CURRENT_BINARY_DIR}/ims_app_check
+      USES_TERMINAL)
+endif()
+
 if(SHANNOND_FUZZ)
   add_executable(fuzz_sip fuzz/fuzz_sip.cc)
   target_compile_options(fuzz_sip PRIVATE -fsanitize=fuzzer)
