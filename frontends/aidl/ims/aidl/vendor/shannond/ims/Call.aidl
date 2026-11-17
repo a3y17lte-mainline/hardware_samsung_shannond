@@ -18,4 +18,6 @@ parcelable Call {
     boolean retryOnCs;
     /** Once ENDED: moved to CS by the network (SRVCC); it continues as a CS call */
     boolean handedOver;
+    /** Outgoing, before the answer: the network plays the ringback (early media) */
+    boolean earlyMedia;
 }

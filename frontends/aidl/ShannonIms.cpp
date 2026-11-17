@@ -49,6 +49,7 @@ Call call(const ims::ImsCallInfo &info)
     c.endReason = info.endReason;
     c.retryOnCs = info.retryOnCs;
     c.handedOver = info.handedOver;
+    c.earlyMedia = info.earlyMedia;
     return c;
 }
 

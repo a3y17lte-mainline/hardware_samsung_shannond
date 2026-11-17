@@ -29,6 +29,7 @@ final class ShannonCallSession extends ImsCallSessionImplBase {
     private boolean mEstablished;
     private boolean mRemoteHeld;
     private boolean mLocalEnd;
+    private boolean mEarlyMedia;
 
     /** call: the HAL's incoming call, null for an outgoing one */
     ShannonCallSession(ShannonMmTelFeature feature, Hal hal, ImsCallProfile profile, Call call) {
@@ -186,18 +187,24 @@ final class ShannonCallSession extends ImsCallSessionImplBase {
         mCallState = call.state;
         ImsCallSessionListener l = mListener;
         switch (call.state) {
-            case CallState.ALERTING:
-                if (previous != CallState.ALERTING && l != null) {
-                    // The phone plays the ringback (direction inactive): the
-                    // network's early media is not told apart yet
+            case CallState.DIALING:
+            case CallState.ALERTING: {
+                // Progress: the phone plays its own ringback unless the network
+                // plays one (early media: audio direction send-receive)
+                final boolean early = call.earlyMedia != mEarlyMedia;
+                mEarlyMedia = call.earlyMedia;
+                final boolean alerting = call.state == CallState.ALERTING && previous != CallState.ALERTING;
+                if (l != null && (alerting || (early && (call.state == CallState.ALERTING || mEarlyMedia)))) {
                     l.callSessionProgressing(new ImsStreamMediaProfile(
                             ImsStreamMediaProfile.AUDIO_QUALITY_AMR_WB,
-                            ImsStreamMediaProfile.DIRECTION_INACTIVE,
+                            mEarlyMedia ? ImsStreamMediaProfile.DIRECTION_SEND_RECEIVE
+                                        : ImsStreamMediaProfile.DIRECTION_INACTIVE,
                             ImsStreamMediaProfile.VIDEO_QUALITY_NONE,
                             ImsStreamMediaProfile.DIRECTION_INVALID,
                             ImsStreamMediaProfile.RTT_MODE_DISABLED));
                 }
                 break;
+            }
             case CallState.ACTIVE:
                 mState = State.ESTABLISHED;
                 if (!mEstablished) {
