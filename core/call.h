@@ -41,6 +41,9 @@ public:
     // Called with true when the first call connects or rings out, false when
     // the last one ends
     void onAudio(std::function<void(bool active)> callback) { audio_ = std::move(callback); }
+    // A VoLTE call needs the call audio too (the modem's voice engine plays
+    // into the same PCM path): the same audio path, volume and hook
+    void setImsAudio(bool active);
 
     // identity: IPC_CALL_IDENTITY (default, hide or show the number)
     void dial(const std::string &number, Done done, uint8_t identity = 0);
@@ -83,6 +86,7 @@ private:
     std::vector<std::function<void()>> changed_;
     std::function<void(bool)> audio_;
     bool audioActive_ = false;
+    bool imsAudio_ = false;
     uint8_t lastEndCause_ = 0;
     uint8_t lastEndCauseType_ = 0;
     uint8_t audioPath_ = 0x01;  // handset

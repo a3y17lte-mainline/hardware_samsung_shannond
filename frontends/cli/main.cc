@@ -13,7 +13,8 @@
 // A modem that already runs (another client had it) is taken over.
 //
 // VoLTE starts only with "ims on": it brings up the IMS PDN and registers
-// with the network as the SIM's subscriber.
+// with the network as the SIM's subscriber. "ims dial" places a VoLTE call; incoming
+// ones show as "event ims-call ID:incoming:..." and are taken with "ims answer ID".
 #include <cerrno>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -252,6 +253,15 @@ public:
         data_.onChanged([this](const DataCall &c) {
             event("data " + std::to_string(c.cid) + (c.active ? " up " + c.iface : " down"));
         });
+        ims_.calls().onAudio([this](bool on) { calls_.setImsAudio(on); });
+        ims_.calls().onChanged([this](const ims::ImsCallInfo &c) {
+            std::string line = "ims-call " + std::to_string(c.id) + ":" + ims::callStateName(c.state) + ":" +
+                               (c.incoming ? "in" : "out") + ":" + c.number + (c.remoteHeld ? ":remote-held" : "");
+            if (c.state == ims::ImsCallState::Ended)
+                line += " (" + (c.endStatus ? std::to_string(c.endStatus) + " " : "") + c.endReason +
+                        (c.retryOnCs ? ", retry on CS" : "") + ")";
+            event(line);
+        });
         ims_.onChanged([this] {
             std::string line = "ims " + ims_.status();
             if (line != lastIms_) {
@@ -329,7 +339,8 @@ private:
             reply(fd, "status | radio on|off | data connect CID APN [ims] | data disconnect CID | "
                       "data list | sms send TPDU-HEX | call dial NUMBER | call answer | "
                       "call hangup | call list | dtmf TONE | sim apps | sim auth RAND AUTN | "
-                      "sim apdu HEX | ims on|off|status | quit");
+                      "sim apdu HEX | ims on|off|status | ims dial NUMBER | ims calls | "
+                      "ims answer|hangup|hold|resume ID | ims dtmf ID DIGIT | quit");
         } else if (cmd == "status") {
             reply(fd, "sim " + std::string(simStateName(sim_.state())) + ", data " +
                           regStateName(network_.data().state) + " on " +
@@ -435,6 +446,38 @@ private:
             reply(fd, "ok ims " + ims_.status());
         } else if (cmd == "ims" && (arg1 == "status" || arg1.empty())) {
             reply(fd, "ims " + ims_.status());
+        } else if (cmd == "ims" && arg1 == "dial" && !arg2.empty()) {
+            // A VoLTE call: only ever on the user's request
+            auto id = ims_.calls().dial(arg2);
+            reply(fd, id ? "ok ims-call " + std::to_string(*id) : "error not registered");
+        } else if (cmd == "ims" && arg1 == "calls") {
+            std::string s;
+            for (const auto &c : ims_.calls().calls())
+                s += std::to_string(c.id) + ":" + ims::callStateName(c.state) + ":" + (c.incoming ? "in" : "out") +
+                     ":" + c.number + " ";
+            reply(fd, "ims-calls " + (s.empty() ? std::string("none") : s));
+        } else if (cmd == "ims" && (arg1 == "answer" || arg1 == "hangup" || arg1 == "hold" || arg1 == "resume" ||
+                                    arg1 == "dtmf")) {
+            int id = 0;
+            try {
+                id = std::stoi(arg2);
+            } catch (...) {
+                reply(fd, "error usage: ims " + arg1 + " ID" + (arg1 == "dtmf" ? " DIGIT" : ""));
+                return;
+            }
+            bool ok = false;
+            auto &c = ims_.calls();
+            if (arg1 == "answer")
+                ok = c.answer(id);
+            else if (arg1 == "hangup")
+                ok = c.hangup(id);
+            else if (arg1 == "hold")
+                ok = c.hold(id);
+            else if (arg1 == "resume")
+                ok = c.resume(id);
+            else
+                ok = arg3.size() == 1 && c.dtmf(id, arg3[0]);
+            done(ok);
         } else {
             reply(fd, "error unknown command: " + line);
         }

@@ -123,7 +123,10 @@ bool sameDtmf(const MediaSetup &a, const MediaSetup &b)
 
 VoiceEngine::VoiceEngine(Modem &modem, VoiceEngineConfig config) : modem_(modem), config_(config)
 {
-    modem_.onMessage(IPC_IMS_DEDICATED_BEARER, [this](const Message &m) {
+    auto alive = alive_;
+    modem_.onMessage(IPC_IMS_DEDICATED_BEARER, [this, alive](const Message &m) {
+        if (!*alive)
+            return;
         auto h = m.as<ipc_ims_dedicated_bearer_header>();
         if (!h)
             return;
@@ -134,7 +137,15 @@ VoiceEngine::VoiceEngine(Modem &modem, VoiceEngineConfig config) : modem_(modem)
         if (events_.bearer)
             events_.bearer(h->bearer_id, h->qci, added);
     });
-    modem_.onMessage(IPC_IMS_OPTION, [this](const Message &m) { media(m); });
+    modem_.onMessage(IPC_IMS_OPTION, [this, alive](const Message &m) {
+        if (*alive)
+            media(m);
+    });
+}
+
+VoiceEngine::~VoiceEngine()
+{
+    *alive_ = false;
 }
 
 void VoiceEngine::media(const Message &m)
@@ -149,7 +160,10 @@ void VoiceEngine::media(const Message &m)
 
 void VoiceEngine::send(uint16_t command, uint8_t type, Bytes data, Done done)
 {
-    modem_.request(command, type, std::move(data), [this, command, done](const Result &r) {
+    auto alive = alive_;
+    modem_.request(command, type, std::move(data), [this, alive, command, done](const Result &r) {
+        if (!*alive)
+            return;
         if (!r.ok)
             modem_.log("ims: voice engine %s failed (0x%04x%s)", commandName(command), r.code,
                        r.timeout ? ", timeout" : "");

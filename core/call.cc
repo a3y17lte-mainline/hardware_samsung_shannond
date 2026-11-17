@@ -89,9 +89,18 @@ void Calls::listReceived(const Message &message)
     }
 
     calls_ = std::move(calls);
-    if (calls_.empty())
+    if (calls_.empty() && !imsAudio_)
         setAudio(false);
     notify();
+}
+
+void Calls::setImsAudio(bool active)
+{
+    imsAudio_ = active;
+    if (active)
+        setAudio(true);
+    else if (calls_.empty())
+        setAudio(false);
 }
 
 void Calls::setAudio(bool active)

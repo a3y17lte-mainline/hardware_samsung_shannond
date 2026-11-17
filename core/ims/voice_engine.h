@@ -11,6 +11,7 @@
 #pragma once
 
 #include <map>
+#include <memory>
 #include <set>
 
 #include "core/ims/media.h"
@@ -29,6 +30,12 @@ struct VoiceEngineConfig {
 class VoiceEngine : public MediaEngine {
 public:
     VoiceEngine(Modem &modem, VoiceEngineConfig config = {});
+    ~VoiceEngine();
+    VoiceEngine(const VoiceEngine &) = delete;
+    VoiceEngine &operator=(const VoiceEngine &) = delete;
+
+    // The profile's settings, before the first call
+    void setConfig(VoiceEngineConfig config) { config_ = config; }
 
     void prepare(const std::string &localAddress, const std::string &pdnName, Done done) override;
     uint16_t allocatePort() override;
@@ -61,6 +68,7 @@ private:
     bool engineOn_ = false;
     std::map<int, Channel> channels_;
     std::set<uint16_t> ports_;
+    std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
 };
 
 }  // namespace shannond::ims

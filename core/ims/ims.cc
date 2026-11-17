@@ -36,6 +36,9 @@ Ims::Ims(Modem &modem, Sim &sim, Network &network, Data &data, NetworkFactory fa
     : modem_(modem), loop_(modem.loop()), sim_(sim), network_(network), data_(data), factory_(std::move(factory)),
       options_(std::move(options))
 {
+    voice_ = std::make_unique<VoiceEngine>(modem_);
+    calls_ = std::make_unique<ImsCalls>(loop_, *voice_);
+    calls_->setLog([this](const std::string &l) { log(l); });
     auto alive = alive_;
     sim_.onChanged([this, alive]() {
         if (*alive)
@@ -55,6 +58,8 @@ Ims::~Ims()
 {
     *alive_ = false;
     loop_.cancel(timer_);
+    calls_.reset();
+    voice_.reset();
     registration_.reset();
     endpoint_.reset();
     imsNetwork_.reset();
@@ -205,6 +210,8 @@ void Ims::pdnUp(const DataCall &call)
     endpoint_->onRequest([this](const SipMessage &request, const Source &source) {
         if (registration_ && registration_->handleRequest(request, source))
             return;
+        if (calls_->handleRequest(request, source))
+            return;
         if (requestHandler_)
             requestHandler_(request, source);
         else
@@ -299,6 +306,19 @@ void Ims::registrationChanged(RegistrationState state, const std::string &why)
 {
     if (phase_ == Phase::Running)
         why_ = why;
+    if (state == RegistrationState::Registered && !calls_->attached() && endpoint_ && registration_) {
+        VoiceEngineConfig c;
+        c.portBase = profile_->audioPort;
+        c.rtpTimeout = profile_->rtpTimeout;
+        c.rtcpTimeout = profile_->rtcpTimeout;
+        c.rtcpOnCall = profile_->rtcpOnCall;
+        c.rtcpRs = profile_->media.bandwidthRs;
+        c.rtcpRr = profile_->media.bandwidthRr;
+        voice_->setConfig(c);
+        calls_->attach(*endpoint_, *registration_, profile_->apn);
+    } else if (state != RegistrationState::Registered && calls_->attached()) {
+        calls_->detach();
+    }
     tellModem(state == RegistrationState::Registered);
     notify();
 }
@@ -325,6 +345,12 @@ void Ims::stop(bool deregister)
     timer_ = 0;
     const bool wasPdn = phase_ == Phase::Pdn;
     phase_ = Phase::Stopping;
+    // Calls end first: their BYEs and CANCELs go out while we still can
+    if (calls_->attached()) {
+        for (const auto &c : calls_->calls())
+            calls_->hangup(c.id);
+        calls_->detach();
+    }
     if (registration_ && deregister && registration_->state() == RegistrationState::Registered) {
         auto alive = alive_;
         registration_->stop([this, alive]() {
@@ -346,6 +372,7 @@ void Ims::stop(bool deregister)
 
 void Ims::finishStop()
 {
+    calls_->detach();
     registration_.reset();
     endpoint_.reset();
     imsNetwork_.reset();

@@ -214,6 +214,7 @@ ImsCalls::ImsCalls(EventLoop &loop, MediaEngine &media) : loop_(loop), media_(me
 ImsCalls::~ImsCalls()
 {
     *alive_ = false;
+    media_.onEvents({});
     for (auto &[id, s] : sessions_)
         for (auto t : {s->ringbackTimer, s->relTimer, s->ringTimer, s->okTimer, s->sessionTimer})
             loop_.cancel(t);

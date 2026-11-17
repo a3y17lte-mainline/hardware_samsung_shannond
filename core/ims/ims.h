@@ -16,9 +16,11 @@
 #include <string>
 
 #include "core/data.h"
+#include "core/ims/call.h"
 #include "core/ims/endpoint.h"
 #include "core/ims/profile.h"
 #include "core/ims/registration.h"
+#include "core/ims/voice_engine.h"
 #include "core/network.h"
 #include "core/sim.h"
 
@@ -58,10 +60,11 @@ public:
     // A line for status output: what IMS waits for or is doing
     std::string status() const;
 
-    // For the call layer, while registered
+    // VoLTE calls (attached to the SIP side while registered)
+    ImsCalls &calls() { return *calls_; }
     ImsRegistration *registration() { return registration_.get(); }
     SipEndpoint *endpoint() { return endpoint_.get(); }
-    // Requests the registration does not take (INVITE, ...)
+    // Requests neither the registration nor the calls take
     void onRequest(SipEndpoint::RequestHandler handler) { requestHandler_ = std::move(handler); }
     void onChanged(std::function<void()> callback) { changed_.push_back(std::move(callback)); }
 
@@ -107,6 +110,8 @@ private:
     EventLoop::TimerId timer_ = 0;
     std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
     SipEndpoint::RequestHandler requestHandler_;
+    std::unique_ptr<VoiceEngine> voice_;
+    std::unique_ptr<ImsCalls> calls_;
     std::vector<std::function<void()>> changed_;
 };
 

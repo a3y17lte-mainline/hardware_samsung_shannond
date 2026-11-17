@@ -358,6 +358,9 @@ TEST(ims_brings_up_pdn_registers_and_tells_the_modem)
     CHECK(loop.runUntil([&] { return regState().has_value(); }));
     CHECK(regState()->status == IPC_IMS_REG_STATUS_REGISTERED && regState()->features == IPC_IMS_FEATURE_VOICE &&
           regState()->rat == IPC_IMS_RAT_LTE);
+    // Calls are possible: the voice engine is on, with the PDN's address
+    CHECK(ims.calls().attached());
+    CHECK(loop.runUntil([&] { return fake.count(IPC_IMS_ENGINE) == 1 && fake.count(IPC_IMS_PDN) == 1; }));
 
     // A cell without voice over PS: deregistered, the PDN goes, the modem
     // hears it
@@ -374,6 +377,7 @@ TEST(ims_brings_up_pdn_registers_and_tells_the_modem)
     CHECK(loop.runUntil(released));
     CHECK(pcscf.deregistered == 1);
     CHECK(net == nullptr || ims.endpoint() == nullptr);
+    CHECK(!ims.calls().attached() && !ims.calls().dial("+420603123456"));
     CHECK(ims.status().find("no voice over PS") != std::string::npos);
 }
 
