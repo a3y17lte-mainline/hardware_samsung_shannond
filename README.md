@@ -30,6 +30,13 @@ Build and test on the host (clang for its sanitizer runtime):
     CC=clang CXX=clang++ cmake -S . -B build -G Ninja -DSHANNOND_SANITIZE=ON
     ninja -C build && build/shannond_tests
 
+The AIDL front end needs the Android tree to build, but its syntax can be
+checked on the host against stand-ins for the NDK headers, generated from
+the frozen radio API (`frontends/aidl/hostcheck`; nothing is linked):
+
+    cmake -B build -DSHANNOND_AIDL_API=.../hardware/interfaces/radio/aidl/aidl_api
+    ninja -C build aidl_check
+
 In an Android tree (`Android.bp`): put this repository and libsamsung-ipc
 (its `Android.bp` builds `libsamsung-ipc-shannon`) into the tree, then build
 `android.hardware.radio-service.a3y17lte`. The device side (init, sepolicy,

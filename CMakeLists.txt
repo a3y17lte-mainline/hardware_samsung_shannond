@@ -60,3 +60,16 @@ target_compile_options(shannond_tests PRIVATE -Wall -Wextra)
 
 enable_testing()
 add_test(NAME shannond_tests COMMAND shannond_tests)
+
+# A syntax check of the AIDL front end on the host, against stand-ins for
+# the NDK headers generated from the frozen radio API (nothing is linked):
+# -DSHANNOND_AIDL_API=.../hardware/interfaces/radio/aidl/aidl_api, then
+# "ninja aidl_check"
+set(SHANNOND_AIDL_API "" CACHE PATH "hardware/interfaces/radio/aidl/aidl_api")
+if(SHANNOND_AIDL_API)
+  add_custom_target(aidl_check
+      COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/frontends/aidl/hostcheck/check.sh
+              ${CMAKE_CURRENT_SOURCE_DIR} ${LIBSAMSUNG_IPC_DIR} ${SHANNOND_AIDL_API}
+              ${CMAKE_CURRENT_BINARY_DIR}/aidl_check
+      USES_TERMINAL)
+endif()
