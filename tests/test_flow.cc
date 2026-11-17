@@ -178,6 +178,12 @@ TEST(outgoing_call_connects_and_switches_audio)
     CHECK(audio.size() == 1 && audio[0]);
     CHECK(s.fake.count(IPC_SND_AUDIO_PATH_CTRL) == 1);
 
+    // The speaker during the call: the modem hears of it at once, and
+    // only of a change
+    s.calls.setAudioPath(IPC_SND_AUDIO_PATH_SPEAKER);
+    s.calls.setAudioPath(IPC_SND_AUDIO_PATH_SPEAKER);
+    CHECK(s.loop.runUntil([&] { return s.fake.count(IPC_SND_AUDIO_PATH_CTRL) == 2; }));
+
     bool hung = false;
     s.calls.hangup([&](bool ok) { hung = ok; });
     CHECK(s.loop.runUntil([&] { return hung && s.calls.list().empty(); }));

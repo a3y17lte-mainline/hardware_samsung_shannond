@@ -46,18 +46,16 @@ public:
     void dtmf(char tone, bool start, Done done);
     void refresh();
 
-    // Audio path in the modem (IPC_SND_AUDIO_PATH_CTRL) and the earpiece
-    // volume, sent when a call starts
-    void setAudioPath(uint8_t path, uint8_t volume)
-    {
-        audioPath_ = path;
-        volume_ = volume;
-    }
+    // The audio path in the modem (IPC_SND_AUDIO_PATH): its echo and
+    // noise tuning for the handset, the speaker or a headset. Sent when a
+    // call starts, and at once when it changes during one
+    void setAudioPath(uint8_t path);
 
 private:
     void status(const Message &message);
     void listReceived(const Message &message);
     void setAudio(bool active);
+    void sendAudioPath();
     void notify();
 
     Modem &modem_;

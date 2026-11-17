@@ -4,6 +4,14 @@
 #include "frontends/aidl/Codec.h"
 
 #include <cstdio>
+#include <sys/system_properties.h>
+#include <thread>
+
+#include <android-base/properties.h>
+
+extern "C" {
+#include <samsung-ipc.h>
+}
 
 namespace shannond::hal {
 
@@ -32,11 +40,46 @@ bool hasIncoming(const std::vector<Call> &calls)
     return false;
 }
 
+// The audio HAL names the call's output here (handset, speaker, headset,
+// headphone); the modem needs it for its echo and noise tuning
+constexpr const char *kCallPathProperty = "vendor.audio.call_path";
+
+uint8_t callAudioPath()
+{
+    const std::string path = ::android::base::GetProperty(kCallPathProperty, "handset");
+    if (path == "speaker")
+        return IPC_SND_AUDIO_PATH_SPEAKER;
+    if (path == "headset")
+        return IPC_SND_AUDIO_PATH_HEADSET;
+    if (path == "headphone")
+        return IPC_SND_AUDIO_PATH_HEADPHONE;
+    return IPC_SND_AUDIO_PATH_HANDSET;
+}
+
 }  // namespace
 
 RadioVoice::RadioVoice(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
 {
+    // Follows the property for as long as the service runs
+    std::thread([stack = stack_] {
+        uint32_t global = 0;
+        uint32_t serial = 0;
+        for (;;) {
+            const uint8_t path = callAudioPath();
+            stack->post([path](Core *core) {
+                if (core)
+                    core->calls.setAudioPath(path);
+            });
+            // Until the property exists, any property change wakes this
+            if (const prop_info *info = __system_property_find(kCallPathProperty))
+                __system_property_wait(info, serial, &serial, nullptr);
+            else
+                __system_property_wait(nullptr, global, &global, nullptr);
+        }
+    }).detach();
+
     stack_->onReady([this](Core &core) {
+        core.calls.setAudioPath(callAudioPath());
         auto ringing = std::make_shared<bool>(false);
         core.calls.onChanged([this, &core, ringing] {
             auto i = indication();

@@ -98,18 +98,37 @@ void Calls::setAudio(bool active)
         return;
     audioActive_ = active;
 
-    if (active) {
-        ipc_snd_audio_path_ctrl_data path{};
-        path.path = audioPath_;
-        modem_.request(IPC_SND_AUDIO_PATH_CTRL, IPC_TYPE_SET, path);
-
-        ipc_snd_spkr_volume_ctrl_data volume{};
-        volume.type = IPC_SND_VOLUME_TYPE_VOICE;
-        volume.volume = volume_;
-        modem_.request(IPC_SND_SPKR_VOLUME_CTRL, IPC_TYPE_SET, volume);
-    }
+    if (active)
+        sendAudioPath();
     if (audio_)
         audio_(active);
+}
+
+void Calls::sendAudioPath()
+{
+    ipc_snd_audio_path_ctrl_data path{};
+    path.path = audioPath_;
+    modem_.request(IPC_SND_AUDIO_PATH_CTRL, IPC_TYPE_SET, path);
+
+    // The modem keeps a volume per kind of output
+    ipc_snd_spkr_volume_ctrl_data volume{};
+    switch (audioPath_) {
+    case IPC_SND_AUDIO_PATH_SPEAKER: volume.type = IPC_SND_VOLUME_TYPE_SPEAKER; break;
+    case IPC_SND_AUDIO_PATH_HEADSET:
+    case IPC_SND_AUDIO_PATH_HEADPHONE: volume.type = IPC_SND_VOLUME_TYPE_HEADSET; break;
+    default: volume.type = IPC_SND_VOLUME_TYPE_VOICE; break;
+    }
+    volume.volume = volume_;
+    modem_.request(IPC_SND_SPKR_VOLUME_CTRL, IPC_TYPE_SET, volume);
+}
+
+void Calls::setAudioPath(uint8_t path)
+{
+    if (path == audioPath_)
+        return;
+    audioPath_ = path;
+    if (audioActive_)
+        sendAudioPath();
 }
 
 void Calls::dial(const std::string &number, Done done)
