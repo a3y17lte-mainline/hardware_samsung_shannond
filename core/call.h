@@ -69,6 +69,8 @@ public:
     void setVolume(uint8_t volume);
 
 private:
+    void originate(const std::string &number, uint8_t identity, uint8_t subtype, uint8_t category,
+                   Done done);
     void status(const Message &message);
     void listReceived(const Message &message);
     void setAudio(bool active);

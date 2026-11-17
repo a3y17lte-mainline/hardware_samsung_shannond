@@ -147,33 +147,37 @@ void Calls::setAudioPath(uint8_t path)
         sendAudioPath();
 }
 
-void Calls::dial(const std::string &number, Done done, uint8_t identity)
+void Calls::originate(const std::string &number, uint8_t identity, uint8_t subtype,
+                      uint8_t category, Done done)
 {
-    ipc_call_outgoing_data data;
+    // IpcTxCallOriginate: the number as dialled, '+' included, and the
+    // prefix byte saying whether it is international
     const bool intl = !number.empty() && number[0] == '+';
-    if (ipc_call_outgoing_setup(&data, IPC_CALL_TYPE_VOICE, identity,
-                                intl ? IPC_CALL_PREFIX_INTL : IPC_CALL_PREFIX_NONE,
-                                intl ? number.c_str() + 1 : number.c_str()) < 0) {
+    const std::string dialled = number.substr(0, IPC_CALL_OUTGOING_NUMBER_MAX);
+    ipc_call_originate_data data;
+    std::memset(&data, 0, sizeof(data));
+    if (dialled.empty() ||
+        ipc_call_outgoing_setup(&data.call, IPC_CALL_TYPE_VOICE, identity,
+                                intl ? IPC_CALL_PREFIX_INTL : IPC_CALL_PREFIX_NATIONAL,
+                                dialled.c_str()) < 0) {
         done(false);
         return;
     }
+    data.call.unknown = subtype;
+    data.category = category;
     modem_.request(IPC_CALL_OUTGOING, IPC_TYPE_EXEC, data, [done](const Result &r) { done(r.ok); });
+}
+
+void Calls::dial(const std::string &number, Done done, uint8_t identity)
+{
+    originate(number, identity, 0, 0, std::move(done));
 }
 
 void Calls::dialEmergency(const std::string &number, uint8_t categories, Done done)
 {
-    // IpcTxCallOriginate with the emergency call type (0x0106) and the
-    // category in the last byte
-    ipc_call_outgoing_emergency_data data;
-    std::memset(&data, 0, sizeof(data));
-    if (ipc_call_outgoing_setup(&data.call, IPC_CALL_TYPE_VOICE, IPC_CALL_IDENTITY_DEFAULT,
-                                IPC_CALL_PREFIX_NONE, number.c_str()) < 0) {
-        done(false);
-        return;
-    }
-    data.call.unknown = IPC_CALL_OUTGOING_EMERGENCY;
-    data.category = categories & 0x7f;
-    modem_.request(IPC_CALL_OUTGOING, IPC_TYPE_EXEC, data, [done](const Result &r) { done(r.ok); });
+    // The emergency call type (0x0106) and the categories in the last byte
+    originate(number, IPC_CALL_IDENTITY_DEFAULT, IPC_CALL_OUTGOING_EMERGENCY, categories & 0x7f,
+              std::move(done));
 }
 
 void Calls::setMute(bool mute, Done done)

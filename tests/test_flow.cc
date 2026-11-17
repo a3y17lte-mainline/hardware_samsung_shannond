@@ -491,6 +491,30 @@ TEST(outgoing_call_connects_and_switches_audio)
     CHECK(audio.size() == 2 && !audio[1]);
 }
 
+TEST(numbers_are_dialled_as_the_stock_ril_dials_them)
+{
+    // The '+' stays in the number, and the prefix byte says international;
+    // national numbers have their own prefix byte, and the caller ID setting
+    // goes along
+    for (const std::string number : {"+420123456789", "800810820"}) {
+        Stack s;
+        CHECK(s.booted());
+        std::optional<bool> dialled;
+        s.calls.dial(number, [&](bool ok) { dialled = ok; }, IPC_CALL_IDENTITY_HIDE);
+        CHECK(s.loop.runUntil([&] { return dialled.has_value(); }));
+        Message out;
+        for (auto &m : s.fake.received)
+            if (m.command == IPC_CALL_OUTGOING)
+                out = m;
+        auto o = out.as<ipc_call_originate_data>();
+        CHECK(o && out.data.size() == sizeof(*o));
+        CHECK(o->call.unknown == 0 && o->call.type == IPC_CALL_TYPE_VOICE &&
+              o->call.identity == IPC_CALL_IDENTITY_HIDE && o->category == 0);
+        CHECK(o->call.prefix == (number[0] == '+' ? IPC_CALL_PREFIX_INTL : IPC_CALL_PREFIX_NATIONAL));
+        CHECK(std::string(reinterpret_cast<const char *>(o->call.number), o->call.number_length) == number);
+    }
+}
+
 TEST(emergency_call_and_mute_as_the_stock_ril_sends_them)
 {
     Stack s;
@@ -502,10 +526,10 @@ TEST(emergency_call_and_mute_as_the_stock_ril_sends_them)
     for (auto &m : s.fake.received)
         if (m.command == IPC_CALL_OUTGOING)
             out = m;
-    auto e = out.as<ipc_call_outgoing_emergency_data>();
+    auto e = out.as<ipc_call_originate_data>();
     CHECK(e && out.data.size() == sizeof(*e));
     CHECK(e->call.unknown == IPC_CALL_OUTGOING_EMERGENCY && e->call.type == IPC_CALL_TYPE_VOICE &&
-          e->call.number_length == 3 && e->category == 0x05);
+          e->call.number_length == 3 && e->call.prefix == IPC_CALL_PREFIX_NATIONAL && e->category == 0x05);
 
     std::optional<bool> muted;
     s.calls.setMute(true, [&](bool ok) { muted = ok; });
