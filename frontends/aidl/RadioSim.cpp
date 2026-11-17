@@ -320,7 +320,7 @@ RadioSim::RadioSim(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
 void RadioSim::transmit(int32_t serial, const sim::SimApdu &message, bool logical)
 {
     stack_->post([this, serial, message, logical](Core *core) {
-        auto respond = [this, serial, logical](RadioResponseInfo info, const sim::IccIoResult &result) {
+        auto respond = [this, logical](RadioResponseInfo info, const sim::IccIoResult &result) {
             if (auto r = response()) {
                 if (logical)
                     r->iccTransmitApduLogicalChannelResponse(info, result);
@@ -377,7 +377,7 @@ void RadioSim::transmit(int32_t serial, const sim::SimApdu &message, bool logica
     }
 
     stack_->post([this, serial, authData](Core *core) {
-        auto respond = [this, serial](RadioResponseInfo info, const sim::IccIoResult &result) {
+        auto respond = [this](RadioResponseInfo info, const sim::IccIoResult &result) {
             if (auto r = response())
                 r->requestIccSimAuthenticationResponse(info, result);
         };
