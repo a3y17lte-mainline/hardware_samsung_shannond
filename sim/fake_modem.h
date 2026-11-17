@@ -68,6 +68,8 @@ public:
     // linear fixed ones (records of one length). Others read as "abc".
     std::map<uint16_t, Bytes> simBinary;
     std::map<uint16_t, std::vector<Bytes>> simRecords;
+    // Whether the card has an ISIM next to its USIM
+    bool hasIsim = true;
     // What the LTE cell says about voice over PS
     bool volteSupported = true;
     // The IPv4 P-CSCF every data call gets

@@ -230,6 +230,14 @@ void Sim::transmitApdu(const Bytes &apdu, std::function<void(std::optional<Bytes
     });
 }
 
+uint8_t Sim::akaType(const Bytes &aid) const
+{
+    for (const auto &app : apps_)
+        if (app.type == kSimAppIsim && (aid.empty() || aid == app.aid))
+            return IPC_SEC_IMS_AUTH_TYPE_IMS;
+    return IPC_SEC_IMS_AUTH_TYPE_USIM;
+}
+
 void Sim::authenticate(uint8_t type, const Bytes &rand, const Bytes &autn,
                        std::function<void(std::optional<SimAuthResult>)> done)
 {

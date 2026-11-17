@@ -641,6 +641,22 @@ TEST(sim_services_for_ims)
     CHECK(s.loop.runUntil([&] { return auth.has_value(); }));
     CHECK(auth->status == 4 && !auth->values.empty() && auth->values[0].size() == 14);
 
+    // The type follows the application: IMS AKA only for the ISIM
+    CHECK(s.sim.akaType() == IPC_SEC_IMS_AUTH_TYPE_IMS);
+    CHECK(s.sim.akaType(s.sim.apps()[1].aid) == IPC_SEC_IMS_AUTH_TYPE_IMS);
+    CHECK(s.sim.akaType(s.sim.apps()[0].aid) == IPC_SEC_IMS_AUTH_TYPE_USIM);
+    // USIM AKA: four values, Kc last
+    sqn[5] = 0x30;
+    auto usim = sim::makeVector(s.fake.milenage, rand, sqn, {0x80, 0x00});
+    auth.reset();
+    s.sim.authenticate(IPC_SEC_IMS_AUTH_TYPE_USIM, Bytes(usim.rand.begin(), usim.rand.end()),
+                       Bytes(usim.autn.begin(), usim.autn.end()), [&](std::optional<SimAuthResult> r) {
+                           if (r)
+                               auth = r;
+                       });
+    CHECK(s.loop.runUntil([&] { return auth.has_value(); }));
+    CHECK(auth->status == 0 && auth->values.size() == 4 && auth->values[3].size() == 8);
+
     std::optional<SimIoResult> io;
     const SimApp isim = s.sim.apps()[1];
     s.sim.io(IPC_SEC_RSIM_COMMAND_READ_BINARY, 0x6f02, {0x3f00, 0x7fff}, 0, 0, 0, {}, &isim,

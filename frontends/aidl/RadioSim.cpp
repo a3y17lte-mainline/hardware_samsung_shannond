@@ -368,7 +368,6 @@ void RadioSim::transmit(int32_t serial, const sim::SimApdu &message, bool logica
                                                            const std::string &authData,
                                                            const std::string &aid)
 {
-    (void)aid;  // the modem picks the application itself (type 0: AKA)
     if (authContext != kAuthContextEapAka) {
         (void)kAuthContextEapSim;
         if (auto r = response())
@@ -376,7 +375,7 @@ void RadioSim::transmit(int32_t serial, const sim::SimApdu &message, bool logica
         return ::ndk::ScopedAStatus::ok();
     }
 
-    stack_->post([this, serial, authData](Core *core) {
+    stack_->post([this, serial, authData, aid](Core *core) {
         auto respond = [this](RadioResponseInfo info, const sim::IccIoResult &result) {
             if (auto r = response())
                 r->requestIccSimAuthenticationResponse(info, result);
@@ -393,7 +392,11 @@ void RadioSim::transmit(int32_t serial, const sim::SimApdu &message, bool logica
             respond(responseInfo(serial, RadioError::INVALID_ARGUMENTS), {});
             return;
         }
-        core->sim.authenticate(0, challenge->rand, challenge->autn,
+        // The ISIM's AID: IMS AKA; any other application: USIM AKA, as the
+        // stock RIL picks the type
+        const Bytes app = fromHex(aid).value_or(Bytes{});
+        const uint8_t type = app.empty() ? IPC_SEC_IMS_AUTH_TYPE_USIM : core->sim.akaType(app);
+        core->sim.authenticate(type, challenge->rand, challenge->autn,
                                [serial, respond](std::optional<SimAuthResult> result) {
             if (!result) {
                 respond(failed(serial), {});

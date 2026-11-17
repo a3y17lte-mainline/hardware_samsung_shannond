@@ -227,9 +227,11 @@ AkaAnswer akaAnswer(uint8_t status, const std::vector<Bytes> &values)
         a.data.insert(a.data.end(), v.begin(), v.end());
     };
     if (status == 0 && values.size() >= 3) {
-        a.data.push_back(0xdb);  // successful: RES, CK, IK
+        a.data.push_back(0xdb);  // successful: RES, CK, IK, and Kc from a USIM (31.102 7.1.2.1)
         for (size_t i = 0; i < 3; i++)
             put(values[i]);
+        if (values.size() >= 4 && !values[3].empty())
+            put(values[3]);
         a.sw1 = 0x90;
     } else if ((status == 4 || status == 5) && !values.empty()) {
         a.data.push_back(0xdc);  // synchronisation failure: AUTS

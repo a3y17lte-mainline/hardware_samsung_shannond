@@ -414,16 +414,20 @@ void FakeModem::handle(const Message &r)
     }
     case IPC_SEC_SIM_APPS_INFO: {
         Bytes data(1 + 2 * sizeof(ipc_sec_sim_app), 0);
-        data[0] = 2;
+        data[0] = hasIsim ? 2 : 1;
+        if (!hasIsim)
+            data.resize(1 + sizeof(ipc_sec_sim_app));
         auto *apps = reinterpret_cast<ipc_sec_sim_app *>(data.data() + 1);
         static const uint8_t usim[] = {0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x02};
         static const uint8_t isim[] = {0xa0, 0x00, 0x00, 0x00, 0x87, 0x10, 0x04};
         apps[0].type = kSimAppUsim;
         apps[0].aid_length = sizeof(usim);
         std::memcpy(apps[0].aid, usim, sizeof(usim));
-        apps[1].type = kSimAppIsim;
-        apps[1].aid_length = sizeof(isim);
-        std::memcpy(apps[1].aid, isim, sizeof(isim));
+        if (hasIsim) {
+            apps[1].type = kSimAppIsim;
+            apps[1].aid_length = sizeof(isim);
+            std::memcpy(apps[1].aid, isim, sizeof(isim));
+        }
         respond(r, data);
         return;
     }
@@ -490,14 +494,26 @@ void FakeModem::handle(const Message &r)
         sim::Block rand, autn;
         std::copy_n(q.begin() + 2, 16, rand.begin());
         std::copy_n(q.begin() + 19, 16, autn.begin());
+        if (q[0] != IPC_SEC_IMS_AUTH_TYPE_USIM && !(q[0] == IPC_SEC_IMS_AUTH_TYPE_IMS && hasIsim)) {
+            respond(r, Bytes{q[0], 2});  // no such application
+            return;
+        }
         auto result = sim::cardAuthenticate(milenage, sqnMs, rand, autn);
+        if (result.status == 0 && q[0] == IPC_SEC_IMS_AUTH_TYPE_USIM) {
+            // USIM AKA also gives the GSM key: Kc = c3(CK, IK)
+            Bytes kc(8);
+            for (int i = 0; i < 8; i++)
+                kc[i] = result.values[1][i] ^ result.values[1][i + 8] ^ result.values[2][i] ^
+                        result.values[2][i + 8];
+            result.values.push_back(kc);
+        }
         Bytes data{q[0], result.status};
         for (const Bytes &v : result.values) {
             data.push_back(static_cast<uint8_t>(v.size()));
             data.insert(data.end(), v.begin(), v.end());
         }
-        if (result.status == 4)  // as the stock RIL reads it: two empty values after AUTS
-            data.insert(data.end(), {0, 0});
+        if (result.status == 4)  // as the stock RIL reads it: empty values after AUTS
+            data.insert(data.end(), q[0] == IPC_SEC_IMS_AUTH_TYPE_USIM ? 3 : 2, 0);
         respond(r, data);
         return;
     }

@@ -86,7 +86,11 @@ public:
     // SW1 SW2 at the end
     void transmitApdu(const Bytes &apdu, std::function<void(std::optional<Bytes>)> done);
 
-    // AKA with RAND and AUTN (type 0)
+    // The AKA type for an application, as the stock RIL picks it: IMS AKA
+    // (IPC_SEC_IMS_AUTH_TYPE_IMS) only for the card's ISIM, else USIM AKA.
+    // An empty AID: the ISIM if the card has one (for IMS)
+    uint8_t akaType(const Bytes &aid = {}) const;
+    // AKA with RAND and AUTN
     void authenticate(uint8_t type, const Bytes &rand, const Bytes &autn,
                       std::function<void(std::optional<SimAuthResult>)> done);
 
