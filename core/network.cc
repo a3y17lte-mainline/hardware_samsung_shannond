@@ -246,6 +246,15 @@ void Network::regist(const Message &message)
     reg.volte = support(r->volte);
     reg.imsEmergency = support(r->ims_emergency);
 
+    // A short frame says nothing about voice over PS: on the same LTE
+    // registration what the longer one said still holds
+    if (reg.tech == AccessTech::Lte && data_.tech == AccessTech::Lte && registered(reg.state)) {
+        if (!reg.volte)
+            reg.volte = data_.volte;
+        if (!reg.imsEmergency)
+            reg.imsEmergency = data_.imsEmergency;
+    }
+
     // One record per domain; on LTE the modem also sends a combined one
     if (r->domain != IPC_NET_SERVICE_DOMAIN_GPRS)
         voice_ = reg;
