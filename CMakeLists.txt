@@ -20,6 +20,12 @@ target_compile_options(samsung-ipc PRIVATE -w)
 target_link_libraries(samsung-ipc PUBLIC OpenSSL::Crypto)
 
 option(SHANNOND_SANITIZE "Build with ASan and UBSan" OFF)
+# libFuzzer targets for network input (clang; configure with
+# -DSHANNOND_FUZZ=ON -DSHANNOND_SANITIZE=ON, run fuzz_sip -max_total_time=60)
+option(SHANNOND_FUZZ "Build the fuzz targets" OFF)
+if(SHANNOND_FUZZ)
+  add_compile_options(-fsanitize=fuzzer-no-link)
+endif()
 if(SHANNOND_SANITIZE)
   add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
   add_link_options(-fsanitize=address,undefined)
@@ -109,4 +115,11 @@ if(SHANNOND_AIDL_API)
               ${CMAKE_CURRENT_SOURCE_DIR} ${LIBSAMSUNG_IPC_DIR} ${SHANNOND_AIDL_API}
               ${CMAKE_CURRENT_BINARY_DIR}/aidl_check
       USES_TERMINAL)
+endif()
+
+if(SHANNOND_FUZZ)
+  add_executable(fuzz_sip fuzz/fuzz_sip.cc)
+  target_compile_options(fuzz_sip PRIVATE -fsanitize=fuzzer)
+  target_link_options(fuzz_sip PRIVATE -fsanitize=fuzzer)
+  target_link_libraries(fuzz_sip PRIVATE shannond_core)
 endif()
