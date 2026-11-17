@@ -437,6 +437,24 @@ private:
             sim_.transmitApdu(*apdu, [this, fd](std::optional<Bytes> r) {
                 reply(fd, r ? "ok apdu " + hex(*r) : "error apdu");
             });
+        } else if (cmd == "ipc" && (arg1 == "set" || arg1 == "get" || arg1 == "exec") && arg2.size() == 4) {
+            // Development: one raw request, e.g. "ipc set 1606 02...": the
+            // modem's answer code, or a GET's answer
+            auto payload = unhex(arg3);
+            if (!payload) {
+                reply(fd, "error bad hex");
+                return;
+            }
+            const uint8_t type = arg1 == "set" ? 3 : arg1 == "get" ? 2 : 1;  // IPC_TYPE_SET, _GET, _EXEC
+            const auto command = static_cast<uint16_t>(std::stoul(arg2, nullptr, 16));
+            modem_.request(command, type, *payload, [this, fd](const Result &r) {
+                char code[8];
+                snprintf(code, sizeof(code), "%04x", r.code);
+                if (r.response)
+                    reply(fd, "ok ipc " + hex(r.response->data));
+                else
+                    reply(fd, std::string(r.ok ? "ok" : "error") + " ipc " + (r.timeout ? "timeout" : code));
+            });
         } else if (cmd == "quit") {
             loop_.unwatch(fd);
             close(fd);
