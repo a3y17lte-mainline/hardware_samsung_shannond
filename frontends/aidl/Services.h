@@ -172,6 +172,8 @@ class RadioMessaging : public NotSupportedMessaging {
 
     ::ndk::ScopedAStatus acknowledgeLastIncomingGsmSms(
             int32_t serial, bool success, messaging::SmsAcknowledgeFailCause cause) override;
+    ::ndk::ScopedAStatus deleteSmsOnSim(int32_t serial, int32_t index) override;
+    ::ndk::ScopedAStatus getGsmBroadcastConfig(int32_t serial) override;
     ::ndk::ScopedAStatus getSmscAddress(int32_t serial) override;
     ::ndk::ScopedAStatus reportSmsMemoryStatus(int32_t serial, bool available) override;
     ::ndk::ScopedAStatus sendSms(int32_t serial, const messaging::GsmSmsMessage &message) override;
@@ -181,6 +183,9 @@ class RadioMessaging : public NotSupportedMessaging {
     ::ndk::ScopedAStatus setGsmBroadcastConfig(
             int32_t serial,
             const std::vector<messaging::GsmBroadcastSmsConfigInfo> &configInfo) override;
+    ::ndk::ScopedAStatus setSmscAddress(int32_t serial, const std::string &smsc) override;
+    ::ndk::ScopedAStatus writeSmsToSim(int32_t serial,
+                                       const messaging::SmsWriteArgs &args) override;
 
   private:
     void send(int32_t serial, const messaging::GsmSmsMessage &message, bool more);

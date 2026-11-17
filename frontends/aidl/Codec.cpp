@@ -107,6 +107,29 @@ std::string bcdAddressToString(const Bytes &address)
     return s;
 }
 
+Bytes stringToBcdAddress(const std::string &number)
+{
+    const bool intl = !number.empty() && number[0] == '+';
+    std::vector<uint8_t> digits;
+    for (size_t i = intl ? 1 : 0; i < number.size(); i++) {
+        const char c = number[i];
+        if (c >= '0' && c <= '9')
+            digits.push_back(c - '0');
+        else if (c == '*')
+            digits.push_back(0xa);
+        else if (c == '#')
+            digits.push_back(0xb);
+        else
+            return {};
+    }
+    if (digits.empty())
+        return {};
+    Bytes address{static_cast<uint8_t>(intl ? 0x91 : 0x81)};
+    for (size_t i = 0; i < digits.size(); i += 2)
+        address.push_back(digits[i] | (i + 1 < digits.size() ? digits[i + 1] : 0xf) << 4);
+    return address;
+}
+
 std::optional<Bytes> fcpToSimResponse(const Bytes &fcp, uint16_t fileId)
 {
     if (fcp.size() < 2 || fcp[0] != 0x62)

@@ -19,6 +19,10 @@ std::optional<Bytes> fromBase64(const std::string &text);
 // An address as in an SMS PDU (type of number, then BCD with swapped
 // nibbles) as "+420123..."
 std::string bcdAddressToString(const Bytes &address);
+// The other way: "+420..." as type of number 0x91 (0x81 without the plus)
+// and BCD; '*' and '#' as the BCD codes 0xa and 0xb. Empty when the number
+// has other characters
+Bytes stringToBcdAddress(const std::string &number);
 
 // A USIM GET RESPONSE (an FCP template, tag 0x62) as the 15 bytes of a SIM
 // GET RESPONSE, which is what the framework parses

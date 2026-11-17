@@ -174,7 +174,10 @@ public:
             }
         });
         sim_.onChanged([this] { event(std::string("sim ") + simStateName(sim_.state())); });
-        sms_.onIncoming([this](const Bytes &pdu) { event("sms " + hex(pdu)); });
+        sms_.onIncoming([this](const Bytes &pdu, bool statusReport) {
+            event((statusReport ? "sms-report " : "sms ") + hex(pdu));
+            sms_.acknowledge(true, false);
+        });
         calls_.onChanged([this] { event("calls " + callList()); });
         calls_.onAudio([this](bool on) {
             if (on)
@@ -300,8 +303,9 @@ private:
                 reply(fd, "error bad hex");
                 return;
             }
-            sms_.send(*tpdu, [this, fd](bool ok, uint8_t ref) {
-                reply(fd, (ok ? "ok sms ref " : "error sms ") + std::to_string(ref));
+            sms_.send(*tpdu, [this, fd](const SmsSendResult &r) {
+                reply(fd, r.ok() ? "ok sms ref " + std::to_string(r.reference)
+                                 : "error sms cause " + std::to_string(r.rpCause));
             });
         } else if (cmd == "call" && arg1 == "dial" && !arg2.empty()) {
             calls_.dial(arg2, done);

@@ -29,7 +29,7 @@ public:
 
     // What a modem sends after its stack started and found the SIM
     void boot();
-    void incomingSms(const Bytes &pdu);
+    void incomingSms(const Bytes &pdu, uint8_t type = 0x01 /* point to point */);
     void incomingCall(const std::string &number);
     void remoteHangup();
     // Camped on a GSM cell without registering: no SIM, emergency calls only
@@ -50,6 +50,8 @@ public:
     size_t rfsChunk = 0;
     // Whether the answer to a SIM toolkit envelope names its request
     bool envelopeAnswersWithSequence = true;
+    // The result of the next SMS sent (0: delivered to the SMSC)
+    uint16_t sendResult = 0;
 
     size_t count(uint16_t command) const;
 
@@ -71,6 +73,7 @@ private:
     int rfs_[2];
     uint8_t seq_ = 0x80;
     uint8_t rfsSeq_ = 0;
+    uint8_t smsId_ = 5;
 
     struct FakeCall {
         uint8_t id;

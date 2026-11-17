@@ -239,28 +239,38 @@ TEST(data_call_comes_up_with_pcscf)
     CHECK(s.data.calls().empty());
 }
 
-TEST(sms_in_is_acknowledged_with_its_type_and_sms_out_reports)
+TEST(sms_in_is_acknowledged_by_the_client_and_sms_out_reports)
 {
     Stack s;
     CHECK(s.booted());
 
-    Bytes got;
-    s.sms.onIncoming([&](const Bytes &pdu) { got = pdu; });
+    std::vector<std::pair<Bytes, bool>> got;
+    s.sms.onIncoming([&](const Bytes &pdu, bool report) { got.push_back({pdu, report}); });
     s.fake.incomingSms(Bytes{0x00, 0x04, 0x0b, 0x91});
-    CHECK(s.loop.runUntil([&] { return !got.empty(); }));
-    CHECK(got == (Bytes{0x00, 0x04, 0x0b, 0x91}));
-    CHECK(s.loop.runUntil([&] { return s.fake.count(IPC_SMS_DELIVER_REPORT) == 1; }));
-    for (auto &m : s.fake.received) {
-        if (m.command == IPC_SMS_DELIVER_REPORT) {
-            auto report = m.as<ipc_sms_deliver_report_request_data>();
-            CHECK(report && report->type == IPC_SMS_TYPE_POINT_TO_POINT && report->id == 5);
-        }
-    }
+    s.fake.incomingSms(Bytes{0x00, 0x06, 0x01}, IPC_SMS_TYPE_STATUS_REPORT);
+    CHECK(s.loop.runUntil([&] { return got.size() == 2; }));
+    CHECK(got[0].first == (Bytes{0x00, 0x04, 0x0b, 0x91}) && !got[0].second);
+    CHECK(got[1].second);
+    // Nothing goes back before the client has the message
+    s.loop.runUntil([] { return false; }, std::chrono::milliseconds(20));
+    CHECK(s.fake.count(IPC_SMS_DELIVER_REPORT) == 0);
 
-    std::optional<std::pair<bool, uint8_t>> sent;
-    s.sms.send(Bytes{0x01, 0x00, 0x0b}, [&](bool ok, uint8_t ref) { sent = {ok, ref}; });
+    // In order; a full memory, as the stock RIL reports it
+    s.sms.acknowledge(true, false);
+    s.sms.acknowledge(false, true);
+    CHECK(s.loop.runUntil([&] { return s.fake.count(IPC_SMS_DELIVER_REPORT) == 2; }));
+    std::vector<ipc_sms_deliver_report_request_data> reports;
+    for (auto &m : s.fake.received)
+        if (auto r = m.as<ipc_sms_deliver_report_request_data>(); r && m.command == IPC_SMS_DELIVER_REPORT)
+            reports.push_back(*r);
+    CHECK(reports[0].type == IPC_SMS_NETWORK_GSM && reports[0].ack == IPC_SMS_ACK_NO_ERROR &&
+          reports[0].id == 5);
+    CHECK(reports[1].ack == IPC_SMS_ACK_PDA_FULL_ERROR && reports[1].id == 6);
+
+    std::optional<SmsSendResult> sent;
+    s.sms.send(Bytes{0x01, 0x00, 0x0b}, [&](const SmsSendResult &r) { sent = r; });
     CHECK(s.loop.runUntil([&] { return sent.has_value(); }));
-    CHECK(sent->first && sent->second == 7);
+    CHECK(sent->ok() && sent->reference == 7);
     // The SMSC from the SIM went in front of the TPDU
     for (auto &m : s.fake.received) {
         if (m.command == IPC_SMS_SEND_MSG) {
@@ -268,6 +278,133 @@ TEST(sms_in_is_acknowledged_with_its_type_and_sms_out_reports)
             CHECK(m.data[h] == 3 && m.data[h + 1] == 0x91 && m.data[h + 4] == 0x01);
         }
     }
+
+    // The network refuses: congestion is worth a retry, a barred number not
+    s.fake.sendResult = 0x8000 + 42;
+    sent.reset();
+    s.sms.send(Bytes{0x01, 0x00, 0x0b}, [&](const SmsSendResult &r) { sent = r; });
+    CHECK(s.loop.runUntil([&] { return sent.has_value(); }));
+    CHECK(sent->error == SmsSendResult::Error::Retry && sent->rpCause == 42);
+    CHECK(smsSendResult(0x8000 + 21, 0).error == SmsSendResult::Error::Failed);
+    CHECK(smsSendResult(0x000c, 0).error == SmsSendResult::Error::FdnBlocked);
+}
+
+TEST(sms_without_a_client_is_acknowledged_by_the_core)
+{
+    Stack s;
+    CHECK(s.booted());
+    s.fake.incomingSms(Bytes{0x00, 0x04, 0x0b, 0x91});
+    CHECK(s.loop.runUntil([&] { return s.fake.count(IPC_SMS_DELIVER_REPORT) == 1; }));
+}
+
+TEST(sms_sim_store_smsc_and_memory)
+{
+    Stack s;
+    CHECK(s.booted());
+
+    std::optional<std::optional<int>> stored;
+    s.sms.writeToSim(IPC_SMS_STATUS_REC_READ, Bytes{0x00, 0x04, 0x0b},
+                     [&](std::optional<int> index) { stored = index; });
+    CHECK(s.loop.runUntil([&] { return stored.has_value(); }));
+    CHECK(*stored == 4);  // the modem's record 3, counted from 1
+    for (auto &m : s.fake.received) {
+        if (m.command == IPC_SMS_SAVE_MSG) {
+            auto h = m.as<ipc_sms_save_msg_request_header>();
+            CHECK(h && h->magic == IPC_SMS_NETWORK_GSM && h->index == IPC_SMS_SIM_INDEX_ANY &&
+                  h->status == IPC_SMS_STATUS_REC_READ && h->length == 3);
+        }
+    }
+
+    std::optional<bool> deleted;
+    s.sms.deleteOnSim(4, [&](bool ok) { deleted = ok; });
+    CHECK(s.loop.runUntil([&] { return deleted.has_value(); }));
+    CHECK(*deleted);
+    for (auto &m : s.fake.received)
+        if (auto d = m.as<ipc_sms_del_msg_request_data>(); d && m.command == IPC_SMS_DEL_MSG)
+            CHECK(d->index == 3);
+
+    std::optional<bool> set;
+    s.sms.setSmsc(Bytes{0x91, 0x24, 0x03, 0x21}, [&](bool ok) { set = ok; });
+    CHECK(s.loop.runUntil([&] { return set.has_value(); }));
+    CHECK(*set && s.sms.smsc() == (Bytes{0x91, 0x24, 0x03, 0x21}));
+    for (auto &m : s.fake.received) {
+        if (m.command == IPC_SMS_SVC_CENTER_ADDR && m.type == IPC_TYPE_SET) {
+            CHECK(m.data.size() == sizeof(ipc_sms_svc_center_addr_set_data));
+            CHECK(m.data[0] == 4 && m.data[1] == 0x91 && m.data[5] == 0);
+        }
+    }
+
+    std::optional<bool> memory;
+    s.sms.setMemoryAvailable(false, [&](bool ok) { memory = ok; });
+    CHECK(s.loop.runUntil([&] { return memory.has_value(); }));
+    for (auto &m : s.fake.received)
+        if (m.command == IPC_SMS_MEM_STATUS)
+            CHECK(m.data == Bytes{IPC_SMS_MEM_STATUS_FULL});
+
+    std::optional<bool> simFull;
+    s.sms.onSimFull([&](bool full) { simFull = full; });
+    s.fake.send(IPC_SMS_MEM_STATUS, IPC_TYPE_NOTI, {IPC_SMS_NETWORK_GSM, IPC_SMS_MEM_STATUS_FULL});
+    CHECK(s.loop.runUntil([&] { return simFull.has_value(); }));
+    CHECK(*simFull);
+}
+
+TEST(cell_broadcast_channels_and_pages)
+{
+    Stack s;
+    CHECK(s.booted());
+
+    std::vector<Bytes> pages;
+    s.sms.onBroadcast([&](const CellBroadcast &b) { pages.push_back(b.page); });
+
+    // Channel 50 and the presidential alert: the warning bits, the listed
+    // channel, no padding
+    std::optional<bool> set;
+    s.sms.setBroadcastConfig({{50, 50, 0, 0xff, true}, {0x1112, 0x1112, 0, 0xff, true}},
+                             [&](bool ok) { set = ok; });
+    CHECK(s.loop.runUntil([&] { return set.has_value(); }));
+    Message config;
+    for (auto &m : s.fake.received)
+        if (m.command == IPC_SMS_CBS_CFG)
+            config = m;
+    CHECK(config.data.size() == 3 + 2);
+    CHECK(config.data[0] == IPC_SMS_CBS_ENABLE &&
+          config.data[1] == (IPC_SMS_CBS_SELECT_WARNINGS | IPC_SMS_CBS_SELECT_ALL_WARNINGS));
+    CHECK(config.data[2] == 1 && config.data[3] == 0 && config.data[4] == 50);
+
+    // Normal channels only: a list padded to its full length
+    set.reset();
+    s.sms.setBroadcastConfig({{50, 52, 0, 0xff, true}, {51, 51, 0, 0xff, false}},
+                             [&](bool ok) { set = ok; });
+    CHECK(s.loop.runUntil([&] { return set.has_value(); }));
+    for (auto &m : s.fake.received)
+        if (m.command == IPC_SMS_CBS_CFG)
+            config = m;
+    CHECK(config.data[1] == IPC_SMS_CBS_SELECT_LIST && config.data[2] == IPC_SMS_CBS_LIST_MAX);
+    CHECK(config.data.size() == 3 + 2 * IPC_SMS_CBS_LIST_MAX);
+    CHECK(config.data[4] == 50 && config.data[6] == 52 && config.data[7] == 0xff);
+
+    // A GSM page on channel 50 passes, one on channel 51 does not
+    Bytes page(88, 0x11);
+    page[2] = 0;
+    page[3] = 50;
+    Bytes frame{IPC_SMS_CBS_TYPE_GSM, 88};
+    frame.insert(frame.end(), page.begin(), page.end());
+    s.fake.send(IPC_SMS_CBS_MSG, IPC_TYPE_NOTI, frame);
+    frame[2 + 3] = 51;
+    s.fake.send(IPC_SMS_CBS_MSG, IPC_TYPE_NOTI, frame);
+    CHECK(s.loop.runUntil([&] { return pages.size() == 1; }));
+    s.loop.runUntil([] { return false; }, std::chrono::milliseconds(20));
+    CHECK(pages.size() == 1 && pages[0] == page);
+
+    // Activation follows the channels
+    std::optional<bool> active;
+    s.sms.setBroadcastActivation(true, [&](bool ok) { active = ok; });
+    CHECK(s.loop.runUntil([&] { return active.has_value(); }));
+    for (auto &m : s.fake.received)
+        if (m.command == IPC_SMS_CBS_CFG)
+            config = m;
+    CHECK(config.data.size() == sizeof(ipc_sms_cbs_activation_data));
+    CHECK(config.data[0] == IPC_SMS_CBS_ENABLE && config.data[1] == 1 && config.data[2] == 10);
 }
 
 TEST(outgoing_call_connects_and_switches_audio)

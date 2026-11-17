@@ -174,12 +174,12 @@ void FakeModem::setCallState(uint8_t status)
     send(IPC_CALL_STATUS, IPC_TYPE_NOTI, toBytes(s));
 }
 
-void FakeModem::incomingSms(const Bytes &pdu)
+void FakeModem::incomingSms(const Bytes &pdu, uint8_t type)
 {
     ipc_sms_incoming_msg_header header{};
-    header.msg_type = IPC_SMS_MSG_TYPE_SINGLE;
-    header.type = IPC_SMS_TYPE_POINT_TO_POINT;
-    header.id = 5;
+    header.msg_type = IPC_SMS_NETWORK_GSM;
+    header.type = type;
+    header.id = smsId_++;
     header.length = pdu.size();
     Bytes data = toBytes(header);
     data.insert(data.end(), pdu.begin(), pdu.end());
@@ -334,13 +334,28 @@ void FakeModem::handle(const Message &r)
         return;
     }
     case IPC_SMS_SVC_CENTER_ADDR:
+        if (r.type != IPC_TYPE_GET) {
+            ack(r);
+            return;
+        }
         respond(r, Bytes{3, 0x91, 0x24, 0x13});
         return;
+    case IPC_SMS_SAVE_MSG:
+    case IPC_SMS_DEL_MSG: {
+        // Saved to record 3; deleted from the record asked for
+        ipc_sms_save_msg_response_data res{};
+        res.magic = IPC_SMS_NETWORK_GSM;
+        res.error = IPC_SMS_ACK_NO_ERROR;
+        auto del = r.as<ipc_sms_del_msg_request_data>();
+        res.index = r.command == IPC_SMS_SAVE_MSG ? 3 : (del ? del->index : 0);
+        respond(r, toBytes(res));
+        return;
+    }
     case IPC_SMS_SEND_MSG: {
         ack(r);
         ipc_sms_send_msg_response_data res{};
         res.type = IPC_SMS_TYPE_OUTGOING;
-        res.ack = IPC_SMS_ACK_NO_ERROR;
+        res.ack = sendResult;
         res.id = 7;
         send(IPC_SMS_SEND_MSG, IPC_TYPE_RESP, toBytes(res), r.mseq);
         return;

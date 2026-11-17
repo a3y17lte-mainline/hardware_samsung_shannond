@@ -38,6 +38,11 @@ TEST(codec_bcd_address)
     CHECK(bcdAddressToString(Bytes{0x91, 0x24, 0x10, 0x32, 0x54, 0xf6}) == "+420123456");
     CHECK(bcdAddressToString(Bytes{0x81, 0x21, 0x43}) == "1234");
     CHECK(bcdAddressToString(Bytes{}).empty());
+
+    CHECK(stringToBcdAddress("+420123456") == (Bytes{0x91, 0x24, 0x10, 0x32, 0x54, 0xf6}));
+    CHECK(stringToBcdAddress("1234") == (Bytes{0x81, 0x21, 0x43}));
+    CHECK(stringToBcdAddress("*21#") == (Bytes{0x81, 0x2a, 0xb1}));
+    CHECK(stringToBcdAddress("12a").empty() && stringToBcdAddress("+").empty());
 }
 
 TEST(codec_fcp_transparent)
