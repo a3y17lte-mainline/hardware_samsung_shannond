@@ -86,6 +86,9 @@ public:
     void sendToUe(const ims::SipMessage &request);
     // A top Via for such a request
     std::string via() const;
+    // Answers to our requests that came to the client port, not the Via's
+    // port-s: the real P-CSCF drops them
+    unsigned misdirected = 0;
     const std::string &address() const { return address_; }
 
 private:

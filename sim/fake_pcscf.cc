@@ -307,6 +307,12 @@ void FakePcscf::challenge(const SipMessage &m, int fd, const Endpoint &to, bool 
 
 void FakePcscf::handle(const SipMessage &m, int fd, const Endpoint &from)
 {
+    // Answers to our own requests at the client port are lost, as on the
+    // real network (they belong at the Via's port-s)
+    if (!m.isRequest() && fd == protectedC_) {
+        misdirected++;
+        return;
+    }
     auto via = Via::parse(m.header("Via").value_or(""));
     // UDP answers go to the Via's sent-by (for protected requests, the
     // UE's protected server port); TCP ones back over the connection
@@ -438,8 +444,10 @@ std::string FakePcscf::via() const
 {
     Via v;
     v.transport = "UDP";
+    // As O2's P-CSCF: it sends from its client port but names its
+    // protected server port, without rport; answers must come there
     v.host = address_;
-    v.port = portC;
+    v.port = portS;
     v.params.set("branch", newBranch());
     return v.str();
 }

@@ -102,6 +102,7 @@ private:
 
     void log(const std::string &line);
     int udpFor(Flow flow) const;
+    Route udpResponseRoute(const Source &source, const SipMessage &request) const;
     bool transmit(const std::string &data, const Route &route, int connection = -1);
     Connection *connect(const Route &route);
     void watchUdp(int fd, Flow flow);

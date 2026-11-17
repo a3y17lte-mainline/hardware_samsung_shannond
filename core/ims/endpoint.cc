@@ -3,6 +3,7 @@
 
 #include <arpa/inet.h>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <netinet/in.h>
 #include <sys/epoll.h>
@@ -736,6 +737,45 @@ void SipEndpoint::handleRequest(SipMessage request, const Source &source)
         respond(source, request, request.makeResponse(501, "Not Implemented"));
 }
 
+// A UDP answer goes where the top Via says (RFC 3261 18.2.2, RFC 3581): the
+// received address, else the sent-by host; the rport value, else the sent-by
+// port. The P-CSCF names its protected server port there (O2's sends from its
+// client port, Via port-s, no rport, and drops answers to its client port),
+// so the answer leaves from our protected client port, over the SA to port-s.
+Route SipEndpoint::udpResponseRoute(const Source &source, const SipMessage &request) const
+{
+    Route route;
+    route.flow = source.flow;
+    route.to = source.from;
+    auto vias = request.headers("Via");
+    auto via = vias.empty() ? std::nullopt : Via::parse(vias.front());
+    if (!via)
+        return route;
+    auto numeric = [](const std::string &host) {
+        unsigned char buf[16];
+        return inet_pton(AF_INET, host.c_str(), buf) == 1 || inet_pton(AF_INET6, host.c_str(), buf) == 1;
+    };
+    if (auto received = via->params.get("received"); received && numeric(*received))
+        route.to.ip = *received;
+    else if (numeric(via->host))
+        route.to.ip = via->host;
+    uint16_t port = via->port ? via->port : uint16_t(5060);
+    if (auto rport = via->params.get("rport"); rport && !rport->empty()) {
+        char *end = nullptr;
+        unsigned long p = std::strtoul(rport->c_str(), &end, 10);
+        if (end && !*end && p > 0 && p <= 0xffff)
+            port = static_cast<uint16_t>(p);
+    }
+    route.to.port = port;
+    if (source.flow != Flow::Plain && current_) {
+        if (port == current_->sas.portPs)
+            route.flow = Flow::Client;
+        else if (port == current_->sas.portPc)
+            route.flow = Flow::Server;
+    }
+    return route;
+}
+
 void SipEndpoint::respond(const Source &source, const SipMessage &request, const SipMessage &response)
 {
     auto branch = request.branch();
@@ -758,6 +798,8 @@ void SipEndpoint::respond(const Source &source, const SipMessage &request, const
     Route route;
     route.flow = source.flow;
     route.to = source.from;
+    if (source.connection < 0)
+        route = udpResponseRoute(source, request);
     log("SIP out: " + describe(response) + " to " + route.to.str());
     if (!transmit(data, route, source.connection) && source.connection >= 0)
         transmit(data, route);  // the connection is gone: over UDP
