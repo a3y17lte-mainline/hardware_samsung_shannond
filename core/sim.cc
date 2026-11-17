@@ -69,6 +69,22 @@ void Sim::query()
     modem_.request(IPC_SEC_PIN_STATUS, IPC_TYPE_GET);
 }
 
+void Sim::readIccid()
+{
+    const SimApp *app = apps_.empty() ? nullptr : &apps_.front();
+    io(IPC_SEC_RSIM_COMMAND_READ_BINARY, 0x2fe2, {0x3f00}, 0, 0, 10, {}, app,
+       [this](std::optional<SimIoResult> r) {
+           if (r && r->sw1 == 0x90) {
+               setIccid(r->data.data(), r->data.size());
+               return;
+           }
+           if (r)
+               modem_.log("ICCID read failed (%02x %02x)", r->sw1, r->sw2);
+           else
+               modem_.log("ICCID read failed (no answer)");
+       });
+}
+
 void Sim::notify()
 {
     for (auto &callback : changed_)
@@ -85,15 +101,14 @@ void Sim::setState(SimState state)
 
     if (state == SimState::Ready) {
         modem_.request(IPC_MISC_ME_IMSI, IPC_TYPE_GET);
-        refreshApps();
-        // The modem announces the card's number only at its start: after
-        // a query, read it from the card (EF ICCID, 2FE2 under the MF)
-        if (queried_ && iccid_.empty())
-            io(0xb0, 0x2fe2, {0x3f00}, 0, 0, 10, {}, nullptr,
-               [this](std::optional<SimIoResult> r) {
-                   if (r && r->sw1 == 0x90)
-                       setIccid(r->data.data(), r->data.size());
-               });
+        refreshApps([this](bool) {
+            // The modem announces the card's number only at its start:
+            // after a take-over, read it from the card (EF ICCID, 2FE2
+            // under the MF), through the USIM as the framework's reads go
+            // (Android needs it in the card status for the subscription)
+            if (queried_ && iccid_.empty())
+                readIccid();
+        });
     }
     notify();
 }

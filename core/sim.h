@@ -100,6 +100,7 @@ public:
 private:
     void pinStatus(const Message &message);
     void setIccid(const uint8_t *data, size_t size);
+    void readIccid();
     void setState(SimState state);
     void notify();
 

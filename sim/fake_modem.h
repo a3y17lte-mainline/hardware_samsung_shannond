@@ -66,7 +66,7 @@ public:
     sim::Sqn sqnMs{};
     // Files of the card's applications, by file id: transparent ones and
     // linear fixed ones (records of one length). Others read as "abc".
-    std::map<uint16_t, Bytes> simBinary;
+    std::map<uint16_t, Bytes> simBinary{{0x2fe2, {0x98, 0x24, 0x20, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0xf1}}};
     std::map<uint16_t, std::vector<Bytes>> simRecords;
     // Whether the card has an ISIM next to its USIM
     bool hasIsim = true;

@@ -162,9 +162,14 @@ TEST(a_running_modem_is_taken_over)
                !s.sim.imsi().empty() && s.sms.ready() && !s.network.imei().empty();
     }));
     // The radio was switched off, and the card's number read from the card
+    // through the USIM: Android needs it in the card status
     CHECK(s.loop.runUntil([&] {
-        return s.fake.count(IPC_PWR_PHONE_STATE) == 1 && s.fake.count(IPC_SEC_RSIM_ACCESS) == 1;
+        return s.fake.count(IPC_PWR_PHONE_STATE) == 1 && s.sim.iccid() == "8942020300000000001";
     }));
+    for (const auto &m : s.fake.received)
+        if (m.command == IPC_SEC_RSIM_ACCESS)
+            if (auto h = m.as<ipc_sec_rsim_aid_request_header>(); h && uint16_t(h->file_id) == 0x2fe2)
+                CHECK(h->app_type == kSimAppUsim);
 }
 
 TEST(a_modem_that_just_started_is_not_probed)
