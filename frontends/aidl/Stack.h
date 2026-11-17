@@ -15,6 +15,7 @@
 
 #include "core/call.h"
 #include "core/data.h"
+#include "core/ims/ims.h"
 #include "core/loop.h"
 #include "core/modem.h"
 #include "core/network.h"
@@ -47,7 +48,16 @@ struct Core {
     Calls calls;
     Sat sat;
     Ss ss;
+    // VoLTE: our own SIP stack. It brings up the IMS PDN itself (Android's
+    // data stack does not see that context) and is switched on by the
+    // ImsService app through the private IMS interface.
+    ims::Ims ims;
     uint8_t supportedModes = 0;  // what the modem accepted when probed
+
+  private:
+    // Keeps the system awake for SIP traffic, and while a VoLTE call exists
+    void imsAwake();
+    EventLoop::TimerId wakeTimer_ = 0;
 };
 
 class Stack {

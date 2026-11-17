@@ -118,6 +118,19 @@ RadioVoice::RadioVoice(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
                 i->callRing(kUnsolicited, true, {});
             *ringing = incoming;
         });
+        // SRVCC of our VoLTE calls; a failed one changes the call states,
+        // as the stock RIL reports it
+        core.ims.onSrvcc([this](ims::SrvccState state) {
+            auto i = indication();
+            if (!i)
+                return;
+            i->srvccStateNotify(kUnsolicited,
+                                state == ims::SrvccState::Started     ? voice::SrvccState::HANDOVER_STARTED
+                                : state == ims::SrvccState::Completed ? voice::SrvccState::HANDOVER_COMPLETED
+                                                                      : voice::SrvccState::HANDOVER_FAILED);
+            if (state == ims::SrvccState::Failed)
+                i->callStateChanged(kUnsolicited);
+        });
     });
 }
 

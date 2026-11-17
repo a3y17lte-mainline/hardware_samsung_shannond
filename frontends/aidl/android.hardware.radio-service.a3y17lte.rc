@@ -4,6 +4,9 @@
 service vendor.radio-a3y17lte /vendor/bin/hw/android.hardware.radio-service.a3y17lte
     class hal
     user radio
-    group radio inet misc
-    capabilities NET_ADMIN NET_RAW
+    group radio inet misc wakelock
+    # NET_ADMIN/NET_RAW: data links, the IMS PDN's routes and IPsec (XFRM), sockets
+    # bound to its interface. WAKE_ALARM: the IMS registration refresh wakes the
+    # phone. BLOCK_SUSPEND: awake while SIP is going on.
+    capabilities NET_ADMIN NET_RAW WAKE_ALARM BLOCK_SUSPEND
     task_profiles HighPerformance

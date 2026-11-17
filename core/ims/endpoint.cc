@@ -452,6 +452,8 @@ SipEndpoint::Connection *SipEndpoint::connect(const Route &route)
 
 bool SipEndpoint::transmit(const std::string &data, const Route &route, int connection)
 {
+    if (activity_)
+        activity_();
     const bool tcp = connection >= 0 || route.tcp;
     if (tcp) {
         Connection *c = nullptr;
@@ -639,6 +641,8 @@ void SipEndpoint::received(const std::string &text, const Source &source)
         return;
     }
     log("SIP in: " + describe(*message) + " from " + source.from.str());
+    if (activity_)
+        activity_();
     if (message->isRequest())
         handleRequest(std::move(*message), source);
     else

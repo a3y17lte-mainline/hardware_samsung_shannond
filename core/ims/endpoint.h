@@ -58,6 +58,9 @@ public:
     SipEndpoint &operator=(const SipEndpoint &) = delete;
 
     void setLog(LogFn log) { log_ = std::move(log); }
+    // Called for every message sent or received (to keep the system awake
+    // while SIP is going on)
+    void onActivity(std::function<void()> callback) { activity_ = std::move(callback); }
     void onRequest(RequestHandler handler) { requestHandler_ = std::move(handler); }
     // A 2xx of an INVITE whose transaction already ended (a retransmission:
     // its ACK was lost)
@@ -124,6 +127,7 @@ private:
     SipTimers timers_;
     LogFn log_;
     RequestHandler requestHandler_;
+    std::function<void()> activity_;
     std::function<void(const SipMessage &)> strayHandler_;
     std::string local_;
     int plainUdp_ = -1;

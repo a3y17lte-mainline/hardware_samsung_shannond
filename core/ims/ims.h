@@ -80,6 +80,9 @@ public:
     // Requests neither the registration nor the calls take
     void onRequest(SipEndpoint::RequestHandler handler) { requestHandler_ = std::move(handler); }
     void onChanged(std::function<void()> callback) { changed_.push_back(std::move(callback)); }
+    // SIP traffic or a call change: something a sleeping system must stay
+    // awake for a moment (calls().any(): for as long as that holds)
+    void onActivity(std::function<void()> callback) { activity_ = std::move(callback); }
     // SRVCC of our calls (not reported without a VoLTE call, as stock). On
     // Completed the calls have ended here and are in the modem's CS call list.
     void onSrvcc(std::function<void(SrvccState)> callback) { srvcc_.push_back(std::move(callback)); }
@@ -131,6 +134,7 @@ private:
     std::unique_ptr<ImsCalls> calls_;
     std::vector<std::function<void()>> changed_;
     std::vector<std::function<void(SrvccState)>> srvcc_;
+    std::function<void()> activity_;
 };
 
 }  // namespace shannond::ims

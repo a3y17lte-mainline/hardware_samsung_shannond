@@ -39,6 +39,10 @@ Ims::Ims(Modem &modem, Sim &sim, Network &network, Data &data, NetworkFactory fa
     voice_ = std::make_unique<VoiceEngine>(modem_);
     calls_ = std::make_unique<ImsCalls>(loop_, *voice_);
     calls_->setLog([this](const std::string &l) { log(l); });
+    calls_->onChanged([this](const ImsCallInfo &) {
+        if (activity_)
+            activity_();
+    });
     auto alive = alive_;
     sim_.onChanged([this, alive]() {
         if (*alive)
@@ -299,6 +303,10 @@ void Ims::pdnUp(const DataCall &call)
     }
     endpoint_ = std::make_unique<SipEndpoint>(loop_, *imsNetwork_, profile_->timers);
     endpoint_->setLog([this](const std::string &l) { log(l); });
+    endpoint_->onActivity([this]() {
+        if (activity_)
+            activity_();
+    });
     endpoint_->onRequest([this](const SipMessage &request, const Source &source) {
         if (registration_ && registration_->handleRequest(request, source))
             return;

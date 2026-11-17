@@ -6,11 +6,46 @@
 #include <android-base/logging.h>
 #include <chrono>
 #include <cstdlib>
+#include <fcntl.h>
+#include <string>
 #include <unistd.h>
 
+#include "core/ims/linux_network.h"
 #include "core/ports.h"
 
 namespace shannond::hal {
+
+namespace {
+
+// A timed kernel wake lock (needs CAP_BLOCK_SUSPEND): it ends by itself, so
+// a crash of this service cannot keep the phone awake
+void stayAwake(std::chrono::seconds time)
+{
+    const int fd = open("/sys/power/wake_lock", O_WRONLY | O_CLOEXEC);
+    if (fd < 0)
+        return;
+    const std::string line =
+            "shannond-ims " + std::to_string(std::chrono::nanoseconds(time).count());
+    (void)!write(fd, line.data(), line.size());
+    close(fd);
+}
+
+}  // namespace
+
+void Core::imsAwake()
+{
+    // A few seconds for a SIP exchange (a registration refresh, a call
+    // coming in); through a call, renewed, since nothing else holds the
+    // system awake for the SIP side of it
+    const bool call = ims.calls().any();
+    stayAwake(std::chrono::seconds(call ? 60 : 5));
+    if (call && !wakeTimer_)
+        wakeTimer_ = modem.loop().after(std::chrono::seconds(30), [this] {
+            wakeTimer_ = 0;
+            if (ims.calls().any())
+                imsAwake();
+        });
+}
 
 Core::Core(EventLoop &loop, int fmt, int rfs, const Config &config)
     : modem(loop, fmt, rfs),
@@ -22,8 +57,18 @@ Core::Core(EventLoop &loop, int fmt, int rfs, const Config &config)
       sms(modem),
       calls(modem),
       sat(modem),
-      ss(modem)
+      ss(modem),
+      ims(modem, sim, network, data,
+          [](const DataCall &pdn) { return std::make_unique<ims::LinuxImsNetwork>(pdn.iface); })
 {
+    // A VoLTE call uses the modem's call audio like a CS call
+    ims.calls().onAudio([this](bool on) { calls.setImsAudio(on); });
+    // After SRVCC the calls are the modem's CS calls: fetch them
+    ims.onSrvcc([this](ims::SrvccState state) {
+        if (state == ims::SrvccState::Completed)
+            calls.refresh();
+    });
+    ims.onActivity([this] { imsAwake(); });
 }
 
 Stack::Stack(Config config) : config_(std::move(config)) {}

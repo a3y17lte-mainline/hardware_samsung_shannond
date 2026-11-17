@@ -176,9 +176,9 @@ network::RegStateResult regStateResult(const Registration &reg, const std::strin
     result.cellIdentity = cellIdentity(reg, plmn);
     result.registeredPlmn = registered(reg.state) ? plmn : std::string();
     if (reg.tech == AccessTech::Lte) {
-        // VoLTE support comes with IMS; until then no VoPS
+        // Voice over PS as the cell says (the registration's VoLTE byte)
         network::EutranRegistrationInfo eutran;
-        eutran.lteVopsInfo.isVopsSupported = false;
+        eutran.lteVopsInfo.isVopsSupported = reg.volte == true;
         eutran.lteVopsInfo.isEmcBearerSupported = false;
         result.accessTechnologySpecificInfo.set<network::AccessTechnologySpecificInfo::eutranInfo>(
                 std::move(eutran));
