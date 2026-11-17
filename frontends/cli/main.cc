@@ -7,6 +7,10 @@
 //
 //   shannond [--nv FILE] [--nv-size N] [--socket PATH] [--apn APN]
 //          [--audio-hook PATH] [--radio-off] [--ims-ignore-vops]
+//   shannond [--socket PATH] --send COMMAND [--listen SECONDS]
+//          (a client: sends one command, prints what comes back)
+//
+// A modem that already runs (another client had it) is taken over.
 //
 // VoLTE starts only with "ims on": it brings up the IMS PDN and registers
 // with the network as the SIM's subscriber.
@@ -18,6 +22,7 @@
 #include <cstring>
 #include <ctime>
 #include <getopt.h>
+#include <poll.h>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -27,6 +32,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "core/attach.h"
 #include "core/call.h"
 #include "core/data.h"
 #include "core/ims/ims.h"
@@ -49,7 +55,48 @@ struct Options {
     std::string audioHook = "/usr/libexec/samsungipcd/voicecall.sh";
     bool radio = true;
     bool imsIgnoreVops = false;
+    std::string send;      // client mode
+    int listenSeconds = 2;
 };
+
+// Client mode: one command to a running daemon, then its replies and
+// events for a while
+int sendCommand(const Options &options)
+{
+    const int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    if (fd < 0 || options.socket.size() >= sizeof(addr.sun_path))
+        return 1;
+    std::strcpy(addr.sun_path, options.socket.c_str());
+    if (connect(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
+        std::fprintf(stderr, "cannot connect to %s: %s\n", options.socket.c_str(), std::strerror(errno));
+        return 1;
+    }
+    const std::string line = options.send + "\n";
+    if (write(fd, line.data(), line.size()) != static_cast<ssize_t>(line.size()))
+        return 1;
+    timespec end;
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    end.tv_sec += options.listenSeconds;
+    for (;;) {
+        timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long left = (end.tv_sec - now.tv_sec) * 1000 + (end.tv_nsec - now.tv_nsec) / 1000000;
+        if (left <= 0)
+            break;
+        pollfd p{fd, POLLIN, 0};
+        if (poll(&p, 1, static_cast<int>(left)) <= 0)
+            break;
+        char buf[4096];
+        ssize_t n = read(fd, buf, sizeof(buf));
+        if (n <= 0)
+            break;
+        (void)!write(STDOUT_FILENO, buf, n);
+    }
+    close(fd);
+    return 0;
+}
 
 ims::Ims::Options imsOptions(const Options &options)
 {
@@ -215,6 +262,8 @@ public:
 
         if (!nv_.valid())
             modem_.log("warning: %s has no valid checksum", options_.nv.c_str());
+        // Another client may have started the modem; it keeps running
+        adoptRunningModem(loop_, network_, sim_, sms_, data_);
     }
 
     void client(int fd)
@@ -438,6 +487,8 @@ int main(int argc, char **argv)
         {"audio-hook", required_argument, nullptr, 'h'},
         {"radio-off", no_argument, nullptr, 'r'},
         {"ims-ignore-vops", no_argument, nullptr, 'v'},
+        {"send", required_argument, nullptr, 'c'},
+        {"listen", required_argument, nullptr, 'l'},
         {},
     };
     int c;
@@ -450,6 +501,8 @@ int main(int argc, char **argv)
         case 'h': options.audioHook = optarg; break;
         case 'r': options.radio = false; break;
         case 'v': options.imsIgnoreVops = true; break;
+        case 'c': options.send = optarg; break;
+        case 'l': options.listenSeconds = std::stoi(optarg); break;
         default:
             std::fprintf(stderr, "usage: shannond [--nv FILE] [--nv-size N] [--socket PATH] "
                                  "[--apn APN] [--audio-hook PATH] [--radio-off] [--ims-ignore-vops]\n");
@@ -457,6 +510,8 @@ int main(int argc, char **argv)
         }
     }
     signal(SIGPIPE, SIG_IGN);
+    if (!options.send.empty())
+        return sendCommand(options);
 
     auto ipcPort = findWwanPort(kPortTypeIpc);
     auto rfsPort = findWwanPort(kPortTypeRfs);
