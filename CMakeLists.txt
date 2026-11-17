@@ -51,6 +51,8 @@ add_library(shannond_core STATIC
     core/ims/registration.cc
     core/ims/isim.cc
     core/ims/ims.cc
+    core/ims/sdp.cc
+    core/ims/voice_engine.cc
     core/alarm.cc)
 target_include_directories(shannond_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(shannond_core PRIVATE -Wall -Wextra -Werror=return-type)
@@ -72,6 +74,7 @@ add_executable(shannond_tests
     tests/test_ss.cc
     tests/test_sip.cc
     tests/test_ims.cc
+    tests/test_sdp.cc
     frontends/aidl/Codec.cpp)
 target_link_libraries(shannond_tests PRIVATE shannond_core)
 target_compile_options(shannond_tests PRIVATE -Wall -Wextra)
