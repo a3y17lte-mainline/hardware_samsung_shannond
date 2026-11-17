@@ -4,6 +4,7 @@
 // base and overrides what the core supports.
 #pragma once
 
+#include <set>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -176,6 +177,9 @@ class RadioData : public NotSupportedData {
     std::vector<data::SetupDataCallResult> list(Core &core);
 
     std::shared_ptr<Stack> stack_;
+    // The contexts Android asked for (core thread). The HAL's own IMS PDN
+    // is not among them and stays out of Android's data call list.
+    std::set<unsigned int> cids_;
 };
 
 class RadioMessaging : public NotSupportedMessaging {

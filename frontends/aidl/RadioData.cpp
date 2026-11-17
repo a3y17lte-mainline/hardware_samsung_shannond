@@ -130,9 +130,14 @@ data::SetupDataCallResult failure(uint8_t cause)
 RadioData::RadioData(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
 {
     stack_->onReady([this](Core &core) {
-        core.data.onChanged([this, &core](const DataCall &) {
+        core.data.onChanged([this, &core](const DataCall &call) {
+            // The HAL's own IMS PDN is not Android's business
+            if (!cids_.count(call.cid))
+                return;
             if (auto i = indication())
                 i->dataCallListChanged(kUnsolicited, list(core));
+            if (!call.active)
+                cids_.erase(call.cid);
         });
     });
 }
@@ -141,7 +146,7 @@ std::vector<data::SetupDataCallResult> RadioData::list(Core &core)
 {
     std::vector<data::SetupDataCallResult> calls;
     for (const auto &[cid, call] : core.data.calls())
-        if (call.active)
+        if (call.active && cids_.count(cid))
             calls.push_back(result(call));
     return calls;
 }
@@ -179,10 +184,20 @@ std::vector<data::SetupDataCallResult> RadioData::list(Core &core)
             return;
         }
 
+        // Context ids as the stock RIL gives them (GetCidFromApnType): 1 is
+        // the IMS PDN's (the modem's voice engine wants it there), 2 the
+        // internet's, the others from 3
+        const auto free = [core](unsigned int c) { return !core->data.calls().count(c); };
+        const int32_t types = dataProfileInfo.supportedApnTypesBitmap;
         unsigned int cid = 0;
-        for (unsigned int c = 1; c <= kDataChannels && !cid; c++)
-            if (!core->data.calls().count(c))
-                cid = c;
+        if (types & static_cast<int32_t>(data::ApnTypes::IMS))
+            cid = free(1) ? 1 : 0;
+        else if ((types & static_cast<int32_t>(data::ApnTypes::DEFAULT)) && free(2))
+            cid = 2;
+        else
+            for (unsigned int c = 3; c <= kDataChannels && !cid; c++)
+                if (free(c))
+                    cid = c;
         if (!cid) {
             if (auto r = response()) {
                 data::SetupDataCallResult full = failure(0);
@@ -193,8 +208,11 @@ std::vector<data::SetupDataCallResult> RadioData::list(Core &core)
         }
 
         const bool roaming = core->network.data().state == RegState::Roaming;
+        cids_.insert(cid);
         core->data.connect(cid, dataProfile(dataProfileInfo, roaming),
                            [this, serial, cid, core](std::optional<DataCall> call) {
+            if (!call || !call->active)
+                cids_.erase(cid);
             auto r = response();
             if (!r)
                 return;
@@ -218,12 +236,15 @@ std::vector<data::SetupDataCallResult> RadioData::list(Core &core)
                 r->deactivateDataCallResponse(notAvailable(serial));
             return;
         }
-        if (cid <= 0 || !core->data.calls().count(static_cast<unsigned int>(cid))) {
+        if (cid <= 0 || !cids_.count(static_cast<unsigned int>(cid)) ||
+            !core->data.calls().count(static_cast<unsigned int>(cid))) {
             if (auto r = response())
                 r->deactivateDataCallResponse(responseInfo(serial, RadioError::INVALID_CALL_ID));
             return;
         }
-        core->data.disconnect(static_cast<unsigned int>(cid), [this, serial](bool success) {
+        core->data.disconnect(static_cast<unsigned int>(cid), [this, serial, cid](bool success) {
+            if (success)
+                cids_.erase(static_cast<unsigned int>(cid));
             if (auto r = response())
                 r->deactivateDataCallResponse(success ? ok(serial) : failed(serial));
         });
