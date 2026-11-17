@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Host-only stand-ins for the NDK headers of the radio HAL interfaces.
 
-    gen_mocks.py AIDL_API_DIR VERSION OUT_DIR
+    gen_mocks.py AIDL_API_DIR VERSION OUT_DIR [AIDL_SOURCE_DIR...]
 
 Writes aidl/android/hardware/radio/.../<Type>.h for every type of the frozen
-API: parcelables as structs, unions over std::variant, enums as enum
+API, and of our own interfaces' sources (which name every type in full, as
+the API dumps do): parcelables as structs, unions over std::variant, enums as enum
 classes, interfaces as abstract classes with a Bn class. Together with the
 hand-written binder and libbase stand-ins next to this script, the AIDL
 front end compiles on the host with -fsyntax-only, which catches wrong
@@ -66,13 +67,13 @@ def value(expr, numeric=False):
     def ref(m):
         r = qualified(m.group(1)) + "::" + m.group(2)
         return f"static_cast<int64_t>({r})" if numeric else r
-    expr = re.sub(r"\b((?:android|aidl)\.[\w.]+)\.(\w+)\b", ref, expr)
+    expr = re.sub(r"\b((?:[a-z]\w*\.)+[A-Z][\w.]*)\.(\w+)\b", ref, expr)
     return expr.replace("{", "{").strip()
 
 
 def deps(text, kinds, own, tops):
     found = set()
-    for d in re.findall(r"\b(android\.hardware\.radio[\w.]*\.[A-Z][\w.]*)", text):
+    for d in re.findall(r"\b((?:[a-z]\w*\.)+[A-Z][\w.]*)", text):
         # A nested type or an enumerator: the file that declares it
         while d not in tops and "." in d:
             d = d.rsplit(".", 1)[0]
@@ -227,19 +228,23 @@ def gen_interface(name, text, kinds):
         m = re.match(r"(?:oneway\s+)?(\S+)\s+(\w+)\s*\((.*)\)$", stmt, re.S)
         if not m:
             continue
+        ret = m.group(1)
         params = []
         for p in filter(None, (s.strip() for s in m.group(3).split(","))):
             p = re.sub(r"^(in|out|inout)\s+", "", p)
             ptype, pname = p.rsplit(None, 1)
             t, by_value, _ = cpp_type(ptype, kinds)
             params.append(f"{t} {pname}" if by_value else f"const {t}& {pname}")
+        if ret != "void":
+            params.append(f"{cpp_type(ret, kinds)[0]}* _aidl_return")
         methods.append(f"    virtual ::ndk::ScopedAStatus {m.group(2)}({', '.join(params)}) = 0;")
     out += methods + ["};"]
     return out
 
 
-def generate(api, version, out):
+def generate(api, version, out, sources=()):
     files = {}
+    dirs = list(sources)
     for pkgdir in api.iterdir():
         vdir = pkgdir / str(version)
         if not vdir.is_dir():
@@ -247,6 +252,8 @@ def generate(api, version, out):
             if not versions:
                 continue
             vdir = pkgdir / str(versions[-1])
+        dirs.append(vdir)
+    for vdir in dirs:
         for f in vdir.rglob("*.aidl"):
             text = strip_comments(f.read_text())
             pkg = re.search(r"package\s+([\w.]+);", text).group(1)
@@ -293,6 +300,6 @@ def generate(api, version, out):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 4:
+    if len(sys.argv) < 4:
         sys.exit(__doc__)
-    generate(Path(sys.argv[1]), int(sys.argv[2]), Path(sys.argv[3]))
+    generate(Path(sys.argv[1]), int(sys.argv[2]), Path(sys.argv[3]), [Path(p) for p in sys.argv[4:]])

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
 // The radio HAL for the Galaxy A3 2017 (Shannon 315 on the mainline WWAN
-// driver): one process serving every radio interface for SIM slot 1, with
-// the modem daemon core underneath.
+// driver): one process serving every radio interface for SIM slot 1 and
+// the private IMS interface for the ImsService app, with the modem daemon
+// core underneath.
 #include <android-base/logging.h>
 #include <android/binder_manager.h>
 #include <android/binder_process.h>
@@ -10,6 +11,7 @@
 #include <cstdlib>
 
 #include "frontends/aidl/Services.h"
+#include "frontends/aidl/ShannonIms.h"
 
 using namespace shannond::hal;
 
@@ -43,6 +45,7 @@ int main(int, char *argv[])
     auto data = ndk::SharedRefBase::make<RadioData>(stack);
     auto messaging = ndk::SharedRefBase::make<RadioMessaging>(stack);
     auto voice = ndk::SharedRefBase::make<RadioVoice>(stack);
+    auto ims = ndk::SharedRefBase::make<ShannonIms>(stack);
 
     stack->start();
 
@@ -53,6 +56,7 @@ int main(int, char *argv[])
     publish(data, "slot1");
     publish(messaging, "slot1");
     publish(voice, "slot1");
+    publish(ims, "default");
 
     ABinderProcess_startThreadPool();
     ABinderProcess_joinThreadPool();

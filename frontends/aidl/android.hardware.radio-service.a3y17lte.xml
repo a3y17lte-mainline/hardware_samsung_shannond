@@ -34,4 +34,9 @@
         <version>5</version>
         <fqname>IRadioVoice/slot1</fqname>
     </hal>
+    <hal format="aidl">
+        <name>vendor.shannond.ims</name>
+        <version>1</version>
+        <fqname>IShannonIms/default</fqname>
+    </hal>
 </manifest>
