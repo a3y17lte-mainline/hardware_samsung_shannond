@@ -390,6 +390,100 @@ TEST(ims_brings_up_pdn_registers_and_tells_the_modem)
     CHECK(ims.status().find("no voice over PS") != std::string::npos);
 }
 
+TEST(ims_srvcc_call_list)
+{
+    // The list the modem gets when SRVCC starts, as the stock RIL builds it
+    auto call = [](int id, ImsCallState state, bool incoming, const char *number) {
+        ImsCallInfo c;
+        c.id = id;
+        c.state = state;
+        c.incoming = incoming;
+        c.number = number;
+        return c;
+    };
+    // One call: transaction 0, whatever its state
+    Bytes one = srvccCallList({call(7, ImsCallState::Alerting, false, "+420603")});
+    CHECK(one == Bytes({1, 0x00, IPC_CALL_TYPE_VOICE, 0, IPC_CALL_TERM_MO, IPC_CALL_LIST_ENTRY_STATUS_ALERTING, 0, 7,
+                        0x81, '+', '4', '2', '0', '6', '0', '3'}));
+    // Held and active: the active one is transaction 0
+    Bytes two = srvccCallList({call(1, ImsCallState::Held, true, "1"), call(2, ImsCallState::Active, false, "2")});
+    CHECK(two == Bytes({2, 0x00, 1, 1, IPC_CALL_TERM_MT, IPC_CALL_LIST_ENTRY_STATUS_HOLDING, 0, 1, 0x81, '1', 0x00, 1,
+                        0, IPC_CALL_TERM_MO, IPC_CALL_LIST_ENTRY_STATUS_ACTIVE, 0, 1, 0x81, '2'}));
+    // No active call: the held one is 0; a ringing call next to it waits
+    Bytes held = srvccCallList({call(1, ImsCallState::Incoming, true, "1"), call(2, ImsCallState::Held, false, "2")});
+    CHECK(held[3] == 1 && held[5] == IPC_CALL_LIST_ENTRY_STATUS_WAITING && held[12] == 0);
+    // Three: active 0, held 1, the third 2
+    Bytes three = srvccCallList({call(1, ImsCallState::Incoming, true, ""), call(2, ImsCallState::Held, false, ""),
+                                 call(3, ImsCallState::Active, false, "")});
+    CHECK(three.size() == 1 + 3 * 8 && three[3] == 2 && three[11] == 1 && three[19] == 0);
+    // A ringing call alone is incoming
+    CHECK(srvccCallList({call(1, ImsCallState::Incoming, true, "")})[5] == IPC_CALL_LIST_ENTRY_STATUS_INCOMING);
+}
+
+TEST(ims_srvcc)
+{
+    EventLoop loop;
+    FakeModem fake{loop};
+    Modem modem{loop, fake.fmtFd(), fake.rfsFd()};
+    Sim sim{modem};
+    Network network{modem};
+    Data data{modem, DataLinks::none()};
+    sim::FakePcscf pcscf{loop, "127.0.0.2", kPcscfPort};
+    fake.pcscf4 = {127, 0, 0, 2};
+    fake.simBinary[0x6fad] = Bytes{0, 0, 0, 2};
+
+    Ims::Options o;
+    o.profile = defaultProfile();
+    o.profile->pcscfPort = kPcscfPort;
+    o.profile->localPort = 0;
+    o.profile->portBase = 45000;
+    o.profile->timers.t1 = std::chrono::milliseconds(10);
+    Ims ims(modem, sim, network, data,
+            [](const DataCall &) { return std::make_unique<sim::FakeImsNetwork>("127.0.0.1"); }, o);
+    std::vector<SrvccState> states;
+    ims.onSrvcc([&](SrvccState s) { states.push_back(s); });
+    std::vector<ImsCallInfo> changes;
+    ims.calls().onChanged([&](const ImsCallInfo &c) { changes.push_back(c); });
+    fake.boot();
+    CHECK(loop.runUntil([&] { return sim.state() == SimState::Ready && network.data().volte == true; }));
+    ims.setEnabled(true);
+    CHECK(loop.runUntil([&] { return ims.registered() && ims.calls().attached(); }));
+    auto lists = [&] {
+        std::vector<Bytes> out;
+        for (const auto &m : fake.received)
+            if (m.command == IPC_CALL_LIST && m.type == IPC_TYPE_SET)
+                out.push_back(m.data);
+        return out;
+    };
+    auto srvcc = [&](uint8_t state) {
+        fake.send(IPC_CALL_SRVCC, IPC_TYPE_NOTI, Bytes{state});
+        loop.runUntil([] { return false; }, std::chrono::milliseconds(100));
+    };
+
+    // Without a VoLTE call the modem's SRVCC is none of ours (as stock)
+    srvcc(IPC_CALL_SRVCC_STARTED);
+    CHECK(states.empty() && lists().empty());
+
+    // A call (the far end never answers): the list when SRVCC starts, the
+    // call stays on IMS when it fails
+    auto id = ims.calls().dial("+420603123456");
+    CHECK(id);
+    CHECK(loop.runUntil([&] { return !changes.empty(); }));
+    srvcc(IPC_CALL_SRVCC_STARTED);
+    CHECK(states == std::vector<SrvccState>{SrvccState::Started});
+    CHECK(lists().size() == 1 && lists()[0] == srvccCallList(ims.calls().calls()));
+    CHECK(lists()[0][5] == IPC_CALL_LIST_ENTRY_STATUS_DIALING);
+    srvcc(IPC_CALL_SRVCC_FAILED);
+    CHECK(states.back() == SrvccState::Failed && ims.calls().calls().size() == 1);
+
+    // Completed: the call is the modem's now
+    srvcc(IPC_CALL_SRVCC_STARTED);
+    srvcc(IPC_CALL_SRVCC_COMPLETED);
+    CHECK(states.back() == SrvccState::Completed && ims.calls().calls().empty());
+    CHECK(changes.back().state == ImsCallState::Ended && changes.back().handedOver);
+    CHECK(ims.registered());
+}
+
 TEST(ims_registers_on_a_card_without_isim)
 {
     EventLoop loop;

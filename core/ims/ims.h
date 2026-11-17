@@ -14,6 +14,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include "core/data.h"
 #include "core/ims/call.h"
@@ -25,6 +26,15 @@
 #include "core/sim.h"
 
 namespace shannond::ims {
+
+// SRVCC as the modem reports it (IPC_CALL_SRVCC): the network moves the
+// VoLTE calls to CS when LTE coverage ends
+enum class SrvccState { Started, Completed, Failed };
+
+// The IMS call list the modem gets when SRVCC starts (IPC_CALL_LIST, set),
+// as the stock RIL builds it: each call with the transaction identifier it
+// will have on CS (3GPP TS 24.237 12.2.4: active 0, held 1, a third call 2)
+Bytes srvccCallList(const std::vector<ImsCallInfo> &calls);
 
 class Ims {
 public:
@@ -70,6 +80,9 @@ public:
     // Requests neither the registration nor the calls take
     void onRequest(SipEndpoint::RequestHandler handler) { requestHandler_ = std::move(handler); }
     void onChanged(std::function<void()> callback) { changed_.push_back(std::move(callback)); }
+    // SRVCC of our calls (not reported without a VoLTE call, as stock). On
+    // Completed the calls have ended here and are in the modem's CS call list.
+    void onSrvcc(std::function<void(SrvccState)> callback) { srvcc_.push_back(std::move(callback)); }
 
     // The SIM's AKA (also what the tests replace)
     void authenticate(const Bytes &rand, const Bytes &autn, std::function<void(AkaAnswer)> done);
@@ -91,6 +104,7 @@ private:
     void dataChanged(const DataCall &call);
     void registrationChanged(RegistrationState state, const std::string &why);
     void tellModem(bool registered);
+    void srvcc(const Message &message);
     std::string accessNetworkInfo() const;
     void notify();
 
@@ -116,6 +130,7 @@ private:
     std::unique_ptr<VoiceEngine> voice_;
     std::unique_ptr<ImsCalls> calls_;
     std::vector<std::function<void()>> changed_;
+    std::vector<std::function<void(SrvccState)>> srvcc_;
 };
 
 }  // namespace shannond::ims

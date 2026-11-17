@@ -13,6 +13,8 @@ namespace {
 constexpr const char *kMmtelService = "urn:urn-7:3gpp-service.ims.icsi.mmtel";
 constexpr const char *kMmtelTag = "+g.3gpp.icsi-ref=\"urn%3Aurn-7%3A3gpp-service.ims.icsi.mmtel\"";
 constexpr const char *kAllow = "INVITE, ACK, CANCEL, BYE, UPDATE, PRACK, OPTIONS, INFO";
+// How long the call audio stays up after SRVCC until the CS call shows up
+constexpr std::chrono::seconds kHandoverAudioHold{3};
 
 bool isSdp(const SipMessage &m)
 {
@@ -218,6 +220,7 @@ ImsCalls::~ImsCalls()
 {
     *alive_ = false;
     media_.onEvents({});
+    loop_.cancel(handoverHold_);
     for (auto &[id, s] : sessions_)
         for (auto t : {s->ringbackTimer, s->relTimer, s->ringTimer, s->okTimer, s->sessionTimer})
             loop_.cancel(t);
@@ -324,7 +327,7 @@ void ImsCalls::updateAudio()
 {
     // Audio while a call has its voice channel (an outgoing call's early
     // media included; an incoming one only once answered)
-    bool on = false;
+    bool on = handoverHold_ != 0;
     for (const auto &[id, s] : sessions_)
         if (s->info.state != ImsCallState::Ended && (s->channel || s->mediaBusy))
             on = true;
@@ -360,6 +363,31 @@ void ImsCalls::detach()
         end(*s, 0, "IMS registration lost", s->info.state == ImsCallState::Dialing);
     endpoint_ = nullptr;
     registration_ = nullptr;
+}
+
+void ImsCalls::handover()
+{
+    bool any = false;
+    for (auto &[id, s] : sessions_)
+        any = any || s->info.state != ImsCallState::Ended;
+    if (!any)
+        return;
+    // The modem's CS call shows up in its call list a moment later: no gap
+    // in the call audio between the two
+    loop_.cancel(handoverHold_);
+    auto alive = alive_;
+    handoverHold_ = loop_.after(kHandoverAudioHold, [this, alive]() {
+        if (!*alive)
+            return;
+        handoverHold_ = 0;
+        updateAudio();
+    });
+    for (auto &[id, s] : sessions_) {
+        if (s->info.state == ImsCallState::Ended)
+            continue;
+        s->info.handedOver = true;
+        end(*s, 0, "SRVCC handover");
+    }
 }
 
 // Building messages

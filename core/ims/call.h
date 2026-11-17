@@ -52,6 +52,8 @@ struct ImsCallInfo {
     int endStatus = 0;
     std::string endReason;
     bool retryOnCs = false;
+    // Ended here by SRVCC: the call goes on as a CS call in the modem
+    bool handedOver = false;
 };
 
 class ImsCalls {
@@ -73,6 +75,10 @@ public:
     void attach(SipEndpoint &endpoint, ImsRegistration &registration, const std::string &pdnName);
     // Registration or PDN gone: every call ends here at once
     void detach();
+    // SRVCC completed: the calls continue on CS. The sessions end here
+    // without a BYE, and the call audio stays up a moment for the CS call
+    // that takes over.
+    void handover();
     bool attached() const { return endpoint_ != nullptr; }
 
     // Requests the registration does not take; false if not a call's
@@ -151,6 +157,7 @@ private:
     int nextId_ = 1;
     bool voiceBearer_ = false;  // a QCI 1 dedicated bearer is up
     bool audioOn_ = false;
+    EventLoop::TimerId handoverHold_ = 0;
     std::vector<Changed> changed_;
     std::function<void(bool)> audio_;
     std::function<void(const std::string &)> log_;

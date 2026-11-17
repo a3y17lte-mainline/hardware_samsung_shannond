@@ -422,6 +422,34 @@ TEST(call_outgoing_cancelled)
     CHECK(b.call(*id)->state == ImsCallState::Ended && !b.call(*id)->retryOnCs);
 }
 
+TEST(call_srvcc_handover)
+{
+    // SRVCC completed: the call ends here without a BYE (it goes on as a
+    // CS call in the modem), marked as handed over; the audio stays up for
+    // the CS call that takes over
+    Bench b;
+    CHECK(b.start());
+    b.script = [&](const SipMessage &m, const Reply &reply) {
+        if (m.method() == "INVITE") {
+            SipMessage r = response(m, 180, "Ringing");
+            r.add("Contact", kFarContact);
+            reply(r);
+        }
+    };
+    b.calls.handover();  // nothing to hand over: no effect
+    CHECK(b.changes.empty() && b.audio.empty());
+    auto id = b.calls.dial("+420603123456");
+    CHECK(b.waitFor([&] { return b.call(*id) && b.call(*id)->state == ImsCallState::Alerting; }));
+    const size_t sent = b.got.size();
+    b.calls.handover();
+    CHECK(b.call(*id)->state == ImsCallState::Ended && b.call(*id)->handedOver && !b.call(*id)->retryOnCs);
+    CHECK(b.calls.calls().empty());
+    CHECK(!b.audio.empty() && b.audio.back());
+    b.loop.runUntil([] { return false; }, std::chrono::milliseconds(200));
+    CHECK(b.got.size() == sent && b.count("BYE") == 0 && b.count("CANCEL") == 0);
+    CHECK(b.waitFor([&] { return b.media.ports.empty(); }));
+}
+
 TEST(call_incoming_with_preconditions)
 {
     Bench b;

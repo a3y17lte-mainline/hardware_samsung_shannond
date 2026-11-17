@@ -52,6 +52,93 @@ Ims::Ims(Modem &modem, Sim &sim, Network &network, Data &data, NetworkFactory fa
         if (*alive)
             dataChanged(call);
     });
+    modem_.onMessage(IPC_CALL_SRVCC, [this, alive](const Message &m) {
+        if (*alive)
+            srvcc(m);
+    });
+}
+
+Bytes srvccCallList(const std::vector<ImsCallInfo> &calls)
+{
+    const ImsCallInfo *active = nullptr, *held = nullptr;
+    for (const auto &c : calls) {
+        if (c.state == ImsCallState::Active && !active)
+            active = &c;
+        if (c.state == ImsCallState::Held && !held)
+            held = &c;
+    }
+    // Stock's GetTidAfterSrvcc, without conference calls
+    auto transactionId = [&](const ImsCallInfo &c) -> uint8_t {
+        if (calls.size() == 2)
+            return active ? (&c != active) : (&c != held);
+        if (calls.size() == 3)
+            return &c == active ? 0 : &c == held ? 1 : 2;
+        return 0;
+    };
+    Bytes out;
+    out.push_back(static_cast<uint8_t>(calls.size()));
+    for (const auto &c : calls) {
+        ipc_call_list_entry e{};
+        e.type = IPC_CALL_TYPE_VOICE;
+        e.id = transactionId(c);
+        e.term = c.incoming ? IPC_CALL_TERM_MT : IPC_CALL_TERM_MO;
+        switch (c.state) {
+        case ImsCallState::Active: e.status = IPC_CALL_LIST_ENTRY_STATUS_ACTIVE; break;
+        case ImsCallState::Held: e.status = IPC_CALL_LIST_ENTRY_STATUS_HOLDING; break;
+        case ImsCallState::Dialing: e.status = IPC_CALL_LIST_ENTRY_STATUS_DIALING; break;
+        case ImsCallState::Alerting: e.status = IPC_CALL_LIST_ENTRY_STATUS_ALERTING; break;
+        default:
+            // Ringing next to another call is a waiting call
+            e.status = active || held ? IPC_CALL_LIST_ENTRY_STATUS_WAITING : IPC_CALL_LIST_ENTRY_STATUS_INCOMING;
+            break;
+        }
+        const std::string number = c.number.substr(0, 0xff);
+        e.number_length = static_cast<uint8_t>(number.size());
+        e.unknown2 = 0x81;
+        const auto *raw = reinterpret_cast<const uint8_t *>(&e);
+        out.insert(out.end(), raw, raw + sizeof(e));
+        out.insert(out.end(), number.begin(), number.end());
+    }
+    return out;
+}
+
+// SRVCC as the stock RIL handles it (CallManager::OnCallSrvccNotification):
+// nothing without a VoLTE call; when it starts the modem gets the call list;
+// when it is done the calls are the modem's CS calls
+void Ims::srvcc(const Message &message)
+{
+    auto d = message.as<ipc_call_srvcc_data>();
+    if (message.type != IPC_TYPE_NOTI || !d)
+        return;
+    const auto calls = calls_->calls();
+    if (calls.empty()) {
+        log("SRVCC state " + std::to_string(d->state) + " without a VoLTE call");
+        return;
+    }
+    SrvccState state;
+    switch (d->state) {
+    case IPC_CALL_SRVCC_STARTED:
+        state = SrvccState::Started;
+        log("SRVCC started: " + std::to_string(calls.size()) + " call(s) to the modem");
+        modem_.request(IPC_CALL_LIST, IPC_TYPE_SET, srvccCallList(calls), [this](const Result &r) {
+            if (!r.ok)
+                log("the modem did not take the IMS call list");
+        });
+        break;
+    case IPC_CALL_SRVCC_COMPLETED:
+        state = SrvccState::Completed;
+        log("SRVCC completed: the calls continue on CS");
+        calls_->handover();
+        break;
+    case IPC_CALL_SRVCC_FAILED:
+        state = SrvccState::Failed;
+        log("SRVCC failed: the calls stay on IMS");
+        break;
+    default:
+        return;
+    }
+    for (auto &c : srvcc_)
+        c(state);
 }
 
 Ims::~Ims()
