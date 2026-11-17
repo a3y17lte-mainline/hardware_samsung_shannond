@@ -153,7 +153,9 @@ void Data::setAttachProfile(const DataProfile &profile, std::function<void(bool)
 
 void Data::connect(unsigned int cid, const DataProfile &profile, Done done)
 {
-    if (cid == 0 || cid > kDataChannels || pending_.count(cid)) {
+    const auto live = calls_.find(cid);
+    if (cid == 0 || cid > kDataChannels || pending_.count(cid) ||
+        (live != calls_.end() && live->second.active)) {
         done(std::nullopt);
         return;
     }
@@ -165,8 +167,10 @@ void Data::connect(unsigned int cid, const DataProfile &profile, Done done)
     calls_[cid].ims = profile.ims;
     sendProfile(cid, profile);
 
-    modem_.loop().after(kConnectTimeout, [this, cid] {
-        if (pending_.count(cid)) {
+    // Only this attempt's timeout: a later connect has its own
+    const unsigned int attempt = ++attempts_[cid];
+    modem_.loop().after(kConnectTimeout, [this, cid, attempt] {
+        if (pending_.count(cid) && attempts_[cid] == attempt) {
             modem_.log("data call %u: no IP configuration", cid);
             complete(cid, false);
         }

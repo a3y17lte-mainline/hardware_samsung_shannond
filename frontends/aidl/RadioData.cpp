@@ -190,9 +190,18 @@ std::vector<data::SetupDataCallResult> RadioData::list(Core &core)
         const auto free = [core](unsigned int c) { return !core->data.calls().count(c); };
         const int32_t types = dataProfileInfo.supportedApnTypesBitmap;
         unsigned int cid = 0;
-        if (types & static_cast<int32_t>(data::ApnTypes::IMS))
-            cid = free(1) ? 1 : 0;
-        else if ((types & static_cast<int32_t>(data::ApnTypes::DEFAULT)) && free(2))
+        if ((types & static_cast<int32_t>(data::ApnTypes::IMS)) &&
+            !(types & static_cast<int32_t>(data::ApnTypes::DEFAULT))) {
+            // The IMS PDN is the HAL's own (cid 1, brought up by its IMS
+            // stack): not Android's to set up, and not worth a retry
+            if (auto r = response()) {
+                data::SetupDataCallResult own = failure(0);
+                own.cause = data::DataCallFailCause::INSUFFICIENT_RESOURCES;
+                own.suggestedRetryTime = INT64_MAX;
+                r->setupDataCallResponse(ok(serial), own);
+            }
+            return;
+        } else if ((types & static_cast<int32_t>(data::ApnTypes::DEFAULT)) && free(2))
             cid = 2;
         else
             for (unsigned int c = 3; c <= kDataChannels && !cid; c++)

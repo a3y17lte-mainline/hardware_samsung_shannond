@@ -99,6 +99,7 @@ private:
     DataLinks links_;
     std::map<unsigned int, DataCall> calls_;
     std::map<unsigned int, Done> pending_;
+    std::map<unsigned int, unsigned int> attempts_;  // connects per cid, for their timeouts
     std::map<unsigned int, uint8_t> failCauses_;
     std::vector<std::function<void(const DataCall &)>> changed_;
 };
