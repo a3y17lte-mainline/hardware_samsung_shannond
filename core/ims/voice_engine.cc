@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "core/ims/voice_engine.h"
 
+#include "core/ims/sip.h"
+
 #include <arpa/inet.h>
 
 #include <memory>
@@ -13,17 +15,13 @@ namespace shannond::ims {
 
 namespace {
 
-// 0x1603 operations and states, as the stock stack sends them
-constexpr uint8_t kMediaStart = 1, kMediaStop = 2, kMediaModify = 3;
-constexpr uint8_t kMediaSendRecv = 3, kMediaHeld = 0;
+constexpr uint8_t kMediaStart = IPC_IMS_RTP_MEDIA_START, kMediaStop = IPC_IMS_RTP_MEDIA_STOP,
+                  kMediaModify = IPC_IMS_RTP_MEDIA_MODIFY;
+constexpr uint8_t kMediaSendRecv = IPC_IMS_RTP_MEDIA_SENDRECV, kMediaHeld = IPC_IMS_RTP_MEDIA_HELD;
 // 0x1601 stream type of a voice channel
 constexpr uint8_t kStreamAudio = 1;
 // 0x1602: every setting of the frame is valid (stock's mask for a voice codec)
 constexpr uint32_t kCodecAllSettings = 0x21ff;
-// 0x1602 packetization (stock: octet-aligned 1, bandwidth-efficient 2)
-constexpr uint8_t kOctetAligned = 1, kBandwidthEfficient = 2;
-// 0x1604 DTMF execute: one tone of the default length
-constexpr uint8_t kDtmfSingle = 0, kDtmfPlay = 1;
 constexpr unsigned kChannels = 8;
 // The modem's data profile flag of 0x1606 (stock passes 1)
 constexpr uint8_t kPdnFlag = 1;
@@ -52,13 +50,29 @@ Bytes frame(const T &data)
     return toBytes(data);
 }
 
-// The codec's mode (bit rate) of the frame: the highest of mode-set, else
-// the codec's highest
+// As stock's AudioSession::Create: the bit rate of the highest mode of
+// mode-set (SdpCreator::GetModeSet, default the codec's highest), and the
+// mode set as a mask of the modes listed, 0 without mode-set
+// (GetModeSetCombination)
 struct CodecInfo {
     uint8_t id = 0;
     unsigned mode = 0;
     uint32_t bitrate = 0;
+    uint16_t modeMask = 0;
 };
+
+uint16_t modeMask(const Codec &c, unsigned highest)
+{
+    auto set = Params::parse(c.fmtp).get("mode-set");
+    uint16_t mask = 0;
+    if (set)
+        for (const auto &m : splitList(*set)) {
+            std::string_view v = trim(m);
+            if (v.size() == 1 && v[0] >= '0' && unsigned(v[0] - '0') <= highest)
+                mask |= uint16_t(1u << (v[0] - '0'));
+        }
+    return mask;
+}
 
 std::optional<CodecInfo> codecInfo(const Codec &c)
 {
@@ -69,12 +83,14 @@ std::optional<CodecInfo> codecInfo(const Codec &c)
         if (info.mode > 8)
             return std::nullopt;
         info.bitrate = IPC_IMS_BITRATE_AMR_WB_6600 << info.mode;
+        info.modeMask = modeMask(c, 8);
     } else if (c.name == "AMR") {
         info.id = IPC_IMS_CODEC_AMR;
         info.mode = c.highestMode().value_or(7);
         if (info.mode > 7)
             return std::nullopt;
         info.bitrate = IPC_IMS_BITRATE_AMR_4750 << info.mode;
+        info.modeMask = modeMask(c, 7);
     } else {
         return std::nullopt;
     }
@@ -130,7 +146,8 @@ VoiceEngine::VoiceEngine(Modem &modem, VoiceEngineConfig config) : modem_(modem)
         auto h = m.as<ipc_ims_dedicated_bearer_header>();
         if (!h)
             return;
-        const bool added = h->event == IPC_IMS_BEARER_ADDED;
+        // Stock (CallSession::OnDedicatedBearer) takes 1 and 2 alike
+        const bool added = h->event == IPC_IMS_BEARER_ALLOCATED || h->event == IPC_IMS_BEARER_ADDED;
         if (!added && h->event != IPC_IMS_BEARER_RELEASED)
             return;
         modem_.log("ims: dedicated bearer %u qci %u %s", h->bearer_id, h->qci, added ? "added" : "released");
@@ -153,9 +170,23 @@ void VoiceEngine::media(const Message &m)
     auto h = m.as<ipc_ims_media_event_header>();
     if (!h)
         return;
-    // The event numbers are not mapped yet (voice-engine.md): logged, so a
-    // call on the phone shows which one an RTP timeout is
-    modem_.log("ims: media event %u on channel %u (%zu bytes)", h->event, h->channel, m.data.size());
+    switch (h->event) {
+    case IPC_IMS_MEDIA_RTP_TIMEOUT:
+        modem_.log("ims: no RTP on channel %u", h->channel);
+        if (events_.timeout)
+            events_.timeout(h->channel);
+        return;
+    case IPC_IMS_MEDIA_RTCP_TIMEOUT:
+        modem_.log("ims: no RTCP on channel %u", h->channel);
+        return;
+    case IPC_IMS_MEDIA_FIRST_RTP:
+        modem_.log("ims: first RTP on channel %u", h->channel);
+        return;
+    case IPC_IMS_MEDIA_STATISTICS:
+        return;  // stock only prints them
+    default:
+        modem_.log("ims: media event %u on channel %u", h->event, h->channel);
+    }
 }
 
 void VoiceEngine::send(uint16_t command, uint8_t type, Bytes data, Done done)
@@ -216,10 +247,10 @@ Bytes VoiceEngine::codecFrame(int channel, const MediaSetup &setup) const
     d.ptime = uint8_t(setup.ptime);
     d.max_rx_ptime = uint8_t(setup.maxptime > 255 ? 255 : setup.maxptime);
     d.channels = 1;
-    d.packetization = setup.codec.octetAlign() ? kOctetAligned : kBandwidthEfficient;
-    d.mode_set = uint16_t(info->mode);
-    // The byte after the mode set: the receive payload type
-    d.unknown3 = setup.codecRxPayloadType ? setup.codecRxPayloadType : setup.codec.payloadType;
+    // Stock: the octet-align value of the fmtp (SdpCreator::GetOctetAlign)
+    d.packetization = setup.codec.octetAlign() ? 1 : 0;
+    d.mode_set = info->modeMask;
+    d.rx_payload_type = setup.codecRxPayloadType ? setup.codecRxPayloadType : setup.codec.payloadType;
     return frame(d);
 }
 
@@ -242,21 +273,13 @@ Bytes VoiceEngine::optionFrame(int channel) const
 
 Bytes VoiceEngine::dtmfFrame(int channel, const MediaSetup &setup) const
 {
-    // 0x1604 set (stock SAE_SetDTMFOptions): @7 channel, @8 payload type,
-    // @9 0, @0x0a u16, @0x0c payload type. Which payload type is the
-    // receive one and the u16 being the clock rate are read from the
-    // callers' argument order, not from a capture.
-    struct __attribute__((packed)) {
-        uint8_t channel;
-        uint8_t txPayloadType;
-        uint8_t zero;
-        uint16_t rate;
-        uint8_t rxPayloadType;
-    } d{};
+    // As stock's AudioSession::Create logs it: "DTMF sndPayload rcvPayload"
+    // and the telephone-event's clock rate
+    ipc_ims_dtmf_set_data d{};
     d.channel = uint8_t(channel);
-    d.txPayloadType = setup.dtmf->payloadType;
+    d.send_payload_type = setup.dtmf->payloadType;
     d.rate = uint16_t(setup.dtmf->rate);
-    d.rxPayloadType = setup.dtmfRxPayloadType ? setup.dtmfRxPayloadType : setup.dtmf->payloadType;
+    d.recv_payload_type = setup.dtmfRxPayloadType ? setup.dtmfRxPayloadType : setup.dtmf->payloadType;
     return frame(d);
 }
 
@@ -266,9 +289,8 @@ Bytes VoiceEngine::mediaFrame(int channel, uint8_t operation, const MediaSetup &
     d.operation = operation;
     d.channel = uint8_t(channel);
     d.status = operation == kMediaStop ? kMediaHeld : (setup.active ? kMediaSendRecv : kMediaHeld);
-    // The last byte: 1 for an IPv6 media address
     Address a;
-    d.unknown = parseAddress(setup.remoteAddress, a) && a.family == IPC_IMS_ADDRESS_IPV6 ? 1 : 0;
+    d.ipv6 = parseAddress(setup.remoteAddress, a) && a.family == IPC_IMS_ADDRESS_IPV6 ? 1 : 0;
     return frame(d);
 }
 
@@ -462,9 +484,14 @@ void VoiceEngine::dtmf(int channel, char digit, Done done)
             done(false);
         return;
     }
-    // 0x1604 execute: @7 channel, @8 event, @9 mode, @0x0a operation
-    const uint8_t d[4] = {uint8_t(channel), uint8_t(code), kDtmfSingle, kDtmfPlay};
-    send(IPC_IMS_DTMF, IPC_TYPE_EXEC, Bytes(d, d + sizeof(d)), std::move(done));
+    // One tone; the code, mode and operation come from the Java side in
+    // stock (CallSession::DoHandleDtmf passes them through)
+    ipc_ims_dtmf_exec_data d{};
+    d.channel = uint8_t(channel);
+    d.code = uint8_t(code);
+    d.mode = IPC_IMS_DTMF_MODE_SINGLE;
+    d.operation = IPC_IMS_DTMF_START;
+    send(IPC_IMS_DTMF, IPC_TYPE_EXEC, frame(d), std::move(done));
 }
 
 }  // namespace shannond::ims

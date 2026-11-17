@@ -217,8 +217,8 @@ TEST(voice_engine_call)
     CHECK(codec.size() == 1);
     auto c = codec[0]->as<ipc_ims_codec_data>();
     CHECK(c && c->changed == 0x21ff && c->codec == IPC_IMS_CODEC_AMR_WB && c->payload_type == 104 &&
-          c->frequency == 16000 && c->bitrate == IPC_IMS_BITRATE_AMR_WB_23850 && c->mode_set == 8 &&
-          c->packetization == 2 && c->unknown3 == 116 && c->ptime == 20 && c->max_rx_ptime == 240);
+          c->frequency == 16000 && c->bitrate == IPC_IMS_BITRATE_AMR_WB_23850 && c->mode_set == 0 &&
+          c->packetization == 0 && c->rx_payload_type == 116 && c->ptime == 20 && c->max_rx_ptime == 240);
 
     auto option = b.sent(IPC_IMS_OPTION);
     CHECK(option.size() == 1);
@@ -262,7 +262,7 @@ TEST(voice_engine_call)
     CHECK(b.sent(IPC_IMS_CHANNEL).size() == 3 && b.sent(IPC_IMS_CODEC).size() == 2);
     auto amr = b.sent(IPC_IMS_CODEC).back()->as<ipc_ims_codec_data>();
     CHECK(amr && amr->codec == IPC_IMS_CODEC_AMR && amr->bitrate == IPC_IMS_BITRATE_AMR_12200 &&
-          amr->packetization == 1 && amr->frequency == 8000);
+          amr->packetization == 1 && amr->frequency == 8000 && amr->mode_set == 0x95);
     CHECK(b.sent(IPC_IMS_RTP_MEDIA).back()->data == Bytes({3, 0, 3, 1}));
 
     std::optional<bool> sentDigit;
@@ -284,6 +284,16 @@ TEST(voice_engine_call)
     b.fake.send(IPC_IMS_DEDICATED_BEARER, IPC_TYPE_NOTI, toBytes(bearer));
     CHECK(b.loop.runUntil([&] { return !bearers.empty(); }));
     CHECK(bearers[0] == std::make_tuple(6, 1, true));
+    // Event 1 is "there" too (stock treats 1 and 2 alike)
+    bearer.event = IPC_IMS_BEARER_ALLOCATED;
+    b.fake.send(IPC_IMS_DEDICATED_BEARER, IPC_TYPE_NOTI, toBytes(bearer));
+    CHECK(b.loop.runUntil([&] { return bearers.size() == 2; }) && std::get<2>(bearers[1]));
+    // An RTP timeout of the channel
+    std::vector<int> timeouts;
+    b.engine.onEvents({{}, [&](int ch) { timeouts.push_back(ch); }});
+    b.fake.send(IPC_IMS_OPTION, IPC_TYPE_NOTI, Bytes{IPC_IMS_MEDIA_STATISTICS, 0});
+    b.fake.send(IPC_IMS_OPTION, IPC_TYPE_NOTI, Bytes{IPC_IMS_MEDIA_RTP_TIMEOUT, 0});
+    CHECK(b.loop.runUntil([&] { return !timeouts.empty(); }) && timeouts == std::vector<int>{0});
 
     std::optional<bool> closed;
     b.engine.close(0, [&](bool ok) { closed = ok; });

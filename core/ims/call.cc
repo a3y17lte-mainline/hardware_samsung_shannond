@@ -200,8 +200,11 @@ ImsCalls::ImsCalls(EventLoop &loop, MediaEngine &media) : loop_(loop), media_(me
     MediaEvents events;
     events.bearer = [this](int id, int qci, bool added) { bearer(id, qci, added); };
     events.timeout = [this](int channel) {
+        // As stock (CallSession::OnRtpRtcpTimeout): only an active call that
+        // expects to receive ends; early media and held calls go on
         for (auto &[id, s] : sessions_)
-            if (s->channel == channel && s->info.state != ImsCallState::Ended) {
+            if (s->channel == channel && s->info.state == ImsCallState::Active && s->local && s->remote &&
+                hasRecv(s->local->direction) && hasSend(s->remote->direction)) {
                 log("call " + std::to_string(id) + ": no RTP, ending it");
                 sendBye(*s);
                 end(*s, 0, "RTP timeout");

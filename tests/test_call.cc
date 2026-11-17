@@ -60,6 +60,7 @@ public:
     }
     void dtmf(int, char digit, Done) override { digits += digit; }
     void bearer(bool added) { events_.bearer(5, 1, added); }
+    void rtpTimeout(int channel) { events_.timeout(channel); }
 
     std::string prepared;
     std::set<uint16_t> ports;
@@ -364,6 +365,9 @@ TEST(call_outgoing_with_preconditions)
     CHECK(Sdp::parse(b.last("INVITE")->body)->direction == Direction::SendOnly);
     CHECK(b.waitFor([&] { return !b.media.channels[0].active; }));
     CHECK(b.waitFor([&] { return b.count("ACK") == 3; }));
+    // No RTP while held: the call stays
+    b.media.rtpTimeout(0);
+    CHECK(b.call(*id)->state == ImsCallState::Held && b.count("BYE") == 0);
 
     CHECK(b.calls.hangup(*id));
     CHECK(b.waitFor([&] { return b.count("BYE") == 1; }));
@@ -582,7 +586,17 @@ TEST(call_incoming_cancelled_and_reinvited)
     CHECK(answer && Sdp::parse(answer->body)->direction == Direction::RecvOnly);
     CHECK(b.waitFor([&] { return b.media.updates >= 1 && !b.media.channels.begin()->second.active; }));
 
-    // Registration lost: the call ends here
+    // Held by the far end we still receive (its music): no RTP ends the call
+    b.media.rtpTimeout(b.media.channels.begin()->first);
+    CHECK(b.waitFor([&] { return b.count("BYE") == 1; }));
+    CHECK(b.call(id)->state == ImsCallState::Ended && b.call(id)->endReason == "RTP timeout");
+
+    // Registration lost with a call ringing: it ends here
+    invite.set("Call-ID", "mt-call-4");
+    invite.set("Via", b.pcscf.via());
+    b.pcscf.sendToUe(invite);
+    CHECK(b.waitFor([&] { return b.calls.calls().size() == 1; }));
+    int ringing = b.calls.calls()[0].id;
     b.calls.detach();
-    CHECK(b.call(id)->state == ImsCallState::Ended);
+    CHECK(b.call(ringing)->state == ImsCallState::Ended);
 }
