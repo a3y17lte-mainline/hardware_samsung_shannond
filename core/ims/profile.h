@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "core/ims/endpoint.h"
+#include "core/ims/sdp.h"
 #include "core/ims/secagree.h"
 
 namespace shannond::ims {
@@ -40,7 +41,16 @@ struct ImsProfile {
 
     // Calls
     bool preconditions = true;
-    unsigned sessionExpires = 3600;
+    unsigned sessionExpires = 1800;  // seconds (RFC 4028), 0: no session timer
+    unsigned minSe = 90;
+    unsigned ringingTimer = 30;   // an incoming call rings this long (seconds)
+    unsigned ringbackTimer = 32;  // an outgoing call waits this long for an answer
+    // Media: the SDP and the modem's voice engine
+    MediaCapabilities media;
+    uint16_t audioPort = 1234;   // the first local RTP port
+    unsigned rtpTimeout = 20;    // seconds
+    unsigned rtcpTimeout = 20;
+    bool rtcpOnCall = false;
     std::vector<int> csfbCodes;  // final answers that send the call to CS
     std::string conferenceUri;
 

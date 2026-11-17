@@ -7,6 +7,7 @@
 // FakeImsNetwork only records what the UE asks of the kernel.
 #pragma once
 
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -77,6 +78,14 @@ public:
 
     // Sends a reg event NOTIFY saying the registration ended
     void terminateRegistration();
+
+    // The other end of calls: every message but REGISTER, SUBSCRIBE and the
+    // answers to our NOTIFYs, with a way to answer on the same path
+    std::function<void(const ims::SipMessage &m, const std::function<void(const ims::SipMessage &)> &reply)> farEnd;
+    // A request to the UE, from our client port to its server port
+    void sendToUe(const ims::SipMessage &request);
+    // A top Via for such a request
+    std::string via() const;
     const std::string &address() const { return address_; }
 
 private:

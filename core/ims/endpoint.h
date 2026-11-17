@@ -59,6 +59,9 @@ public:
 
     void setLog(LogFn log) { log_ = std::move(log); }
     void onRequest(RequestHandler handler) { requestHandler_ = std::move(handler); }
+    // A 2xx of an INVITE whose transaction already ended (a retransmission:
+    // its ACK was lost)
+    void onStrayResponse(std::function<void(const SipMessage &)> handler) { strayHandler_ = std::move(handler); }
 
     // The unprotected sockets: UDP and a TCP listener on port
     bool openPlain(uint16_t port);
@@ -79,6 +82,9 @@ public:
     std::string send(SipMessage request, const Route &route, ResponseHandler handler);
     // Drops a client transaction without calling its handler
     void forget(const std::string &branch);
+    // CANCELs the INVITE of a client transaction (RFC 3261 9.1); false if
+    // it already ended
+    bool cancel(const std::string &branch, ResponseHandler handler);
     // Sends outside any transaction (ACK for a 2xx)
     bool sendStateless(const SipMessage &message, const Route &route);
     // Answers a received request through its server transaction
@@ -117,6 +123,7 @@ private:
     SipTimers timers_;
     LogFn log_;
     RequestHandler requestHandler_;
+    std::function<void(const SipMessage &)> strayHandler_;
     std::string local_;
     int plainUdp_ = -1;
     int plainTcp_ = -1;

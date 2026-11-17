@@ -77,8 +77,9 @@ public:
     // Where requests to the network go once registered
     Route route() const;
     // Builds the parts every request after registration carries: Route set,
-    // P-Access-Network-Info, User-Agent
-    void decorate(SipMessage &request) const;
+    // P-Access-Network-Info, User-Agent. Requests inside a dialog follow
+    // the dialog's route set instead (withRoute false).
+    void decorate(SipMessage &request, bool withRoute = true) const;
 
     // A request from the network: true if it was the registration's (the
     // reg event NOTIFY)

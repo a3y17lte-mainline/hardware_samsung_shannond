@@ -570,11 +570,11 @@ Route ImsRegistration::route() const
     return r;
 }
 
-void ImsRegistration::decorate(SipMessage &request) const
+void ImsRegistration::decorate(SipMessage &request, bool withRoute) const
 {
     // 24.229 5.1.2A.1.1: the preloaded route is the P-CSCF (its protected
     // server port), then the Service-Route the registration gave
-    if (sas_) {
+    if (sas_ && withRoute) {
         Uri pcscf;
         pcscf.scheme = "sip";
         pcscf.host = info_.pcscf;
@@ -582,8 +582,9 @@ void ImsRegistration::decorate(SipMessage &request) const
         pcscf.params.set("lr");
         request.add("Route", "<" + pcscf.str() + ">");
     }
-    for (const auto &r : info_.serviceRoute)
-        request.add("Route", r);
+    if (withRoute)
+        for (const auto &r : info_.serviceRoute)
+            request.add("Route", r);
     if (params_.accessNetworkInfo) {
         std::string pani = params_.accessNetworkInfo();
         if (!pani.empty())

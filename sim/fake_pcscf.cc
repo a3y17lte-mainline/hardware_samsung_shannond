@@ -314,7 +314,7 @@ void FakePcscf::handle(const SipMessage &m, int fd, const Endpoint &from)
     if (!from.ip.empty() && via)
         to = Endpoint{via->host, via->port ? via->port : uint16_t(5060)};
     const bool onProtected = fd == protectedC_ || fd == protectedS_ || from.ip.empty();
-    if (onProtected && via)
+    if (onProtected && via && m.isRequest())
         ueServer = Endpoint{via->host, via->port};
     // A P-CSCF answers protected UDP requests from its client port to the
     // UE's server port (the Via), the SA pair of its own requests
@@ -420,7 +420,28 @@ void FakePcscf::handle(const SipMessage &m, int fd, const Endpoint &from)
         sendTo(fd, to, r);
         return;
     }
+    // Calls and everything else: the test's far end
+    if (farEnd && (!m.isRequest() || m.method() != "NOTIFY")) {
+        farEnd(m, [this, fd, to](const SipMessage &reply) { sendTo(fd, to, reply); });
+        return;
+    }
     // Answers to our NOTIFYs need nothing
+}
+
+void FakePcscf::sendToUe(const SipMessage &request)
+{
+    if (protectedC_ >= 0)
+        sendTo(protectedC_, ueServer, request);
+}
+
+std::string FakePcscf::via() const
+{
+    Via v;
+    v.transport = "UDP";
+    v.host = address_;
+    v.port = portC;
+    v.params.set("branch", newBranch());
+    return v.str();
 }
 
 void FakePcscf::terminateRegistration()

@@ -27,6 +27,10 @@ ImsProfile telefonicaCz()
     p.timers.t4 = std::chrono::milliseconds(5000);
     p.preconditions = true;
     p.sessionExpires = 3600;
+    p.ringingTimer = 90;
+    p.ringbackTimer = 90;
+    // Media: the stock defaults O2 inherits, RTCP during the call its own
+    p.rtcpOnCall = true;
     p.csfbCodes = {403};
     p.conferenceUri = "sip:mmtel@conf-factory.ims.mnc002.mcc230.3gppnetwork.org";
     p.access = {{"lte", {"mmtel"}}};

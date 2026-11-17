@@ -35,6 +35,7 @@ cc_library_static {
         "core/sms.cc",
         "core/ss.cc",
         "core/text.cc",
+        "core/ims/call.cc",
         "core/ims/digest.cc",
         "core/ims/endpoint.cc",
         "core/ims/identity.cc",

@@ -585,6 +585,27 @@ void SipEndpoint::forget(const std::string &branch)
         finish(key);
 }
 
+bool SipEndpoint::cancel(const std::string &branch, ResponseHandler handler)
+{
+    auto it = clients_.find(keyOf(branch, "INVITE"));
+    if (it == clients_.end())
+        return false;
+    const ClientTransaction &t = *it->second;
+    // Same Request-URI, Call-ID, To, From, top Via and Route; the CSeq
+    // number with method CANCEL
+    SipMessage c = SipMessage::request("CANCEL", t.request.requestUri());
+    if (auto via = t.request.header("Via"))
+        c.add("Via", *via);
+    for (const char *h : {"Route", "From", "To", "Call-ID"})
+        for (const auto &v : t.request.headers(h))
+            c.add(h, v);
+    if (auto cseq = t.request.cseq())
+        c.add("CSeq", std::to_string(cseq->first) + " CANCEL");
+    c.add("Max-Forwards", "70");
+    send(std::move(c), t.route, std::move(handler));
+    return true;
+}
+
 void SipEndpoint::sendAck(const ClientTransaction &t, const SipMessage &response)
 {
     // RFC 3261 17.1.1.3: same Request-URI, Call-ID, From, top Via, CSeq
@@ -631,13 +652,24 @@ void SipEndpoint::handleResponse(SipMessage response)
         return;
     const std::string key = keyOf(*branch, cseq->second);
     auto it = clients_.find(key);
-    if (it == clients_.end())
+    if (it == clients_.end()) {
+        // A retransmitted 2xx of an INVITE: the call layer ACKs it again
+        if (cseq->second == "INVITE" && response.status() >= 200 && response.status() < 300 &&
+            strayHandler_)
+            strayHandler_(response);
         return;  // a retransmission after the end, or not ours
+    }
     ClientTransaction &t = *it->second;
     const int status = response.status();
     if (status < 200) {
         if (!t.provisional) {
             t.provisional = true;
+            // INVITE: timer B only runs until a provisional answer; the
+            // call layer times the ringing itself
+            if (t.invite) {
+                loop_.cancel(t.timeoutTimer);
+                t.timeoutTimer = 0;
+            }
             if (t.udp) {
                 loop_.cancel(t.retransmitTimer);
                 t.retransmitTimer = 0;
@@ -689,7 +721,10 @@ void SipEndpoint::handleRequest(SipMessage request, const Source &source)
     }
     auto t = std::make_unique<ServerTransaction>();
     t->source = source;
-    t->expire = loop_.after(timers_.t1 * 64, [this, key]() {
+    // An INVITE's lives until its final answer (then 64*T1 more, see
+    // respond()); the limit only guards against a call layer that never answers
+    t->expire = loop_.after(method == "INVITE" ? std::chrono::milliseconds(std::chrono::minutes(5)) : timers_.t1 * 64,
+                            [this, key]() {
         auto it = servers_.find(key);
         if (it != servers_.end())
             servers_.erase(it);
@@ -706,9 +741,19 @@ void SipEndpoint::respond(const Source &source, const SipMessage &request, const
     auto branch = request.branch();
     std::string data = response.serialize();
     if (branch) {
-        auto it = servers_.find(keyOf(*branch, request.method()));
-        if (it != servers_.end())
+        const std::string key = keyOf(*branch, request.method());
+        auto it = servers_.find(key);
+        if (it != servers_.end()) {
             it->second->lastResponse = data;
+            if (request.method() == "INVITE" && response.status() >= 200) {
+                loop_.cancel(it->second->expire);
+                it->second->expire = loop_.after(timers_.t1 * 64, [this, key]() {
+                    auto it = servers_.find(key);
+                    if (it != servers_.end())
+                        servers_.erase(it);
+                });
+            }
+        }
     }
     Route route;
     route.flow = source.flow;
