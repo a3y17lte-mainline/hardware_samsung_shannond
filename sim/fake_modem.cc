@@ -240,6 +240,15 @@ void FakeModem::handle(const Message &r)
         respond(r, toBytes(sn));
         return;
     }
+    case IPC_SAT_PROACTIVE_CMD:
+        // A terminal response: the card has nothing more
+        respond(r, Bytes{0x90, 0x00});
+        return;
+    case IPC_SAT_ENVELOPE_CMD:
+        // Answered by a notification, with two bytes from the card
+        send(IPC_SAT_ENVELOPE_CMD, IPC_TYPE_NOTI, Bytes{0x90, 0x00, 2, 0xaa, 0xbb},
+             envelopeAnswersWithSequence ? r.mseq : 0);
+        return;
     case IPC_MISC_ME_VERSION:
         respond(r, Bytes(sizeof(ipc_misc_me_version_response_data), 'v'));
         return;

@@ -6,6 +6,7 @@
 #include "core/call.h"
 #include "core/data.h"
 #include "core/network.h"
+#include "core/sat.h"
 #include "core/sim.h"
 #include "core/sms.h"
 #include "sim/fake_modem.h"
@@ -28,6 +29,7 @@ struct Stack {
     Data data{modem, DataLinks::none()};
     Sms sms{modem};
     Calls calls{modem};
+    Sat sat{modem};
 
     bool booted()
     {
@@ -60,6 +62,64 @@ TEST(boot_brings_sim_registration_and_identities)
     CHECK(s.fake.count(IPC_NET_SERVICE_DOMAIN_CONFIG) == 1);
     // No PIN was ever sent
     CHECK(s.fake.count(IPC_SEC_PIN_STATUS) == 0);
+}
+
+TEST(sim_toolkit_commands_wait_for_the_client)
+{
+    Stack s;
+    std::vector<Bytes> commands;
+    int ended = 0;
+    s.sat.onProactiveCommand([&](const Bytes &c) { commands.push_back(c); });
+    s.sat.onSessionEnd([&] { ended++; });
+    CHECK(s.booted());
+
+    // SET UP EVENT LIST as the phone's card sends it at every start
+    const Bytes frame = {0x12, 0x00, 0xd0, 0x10, 0x81, 0x03, 0x01, 0x05, 0x00, 0x82,
+                         0x02, 0x81, 0x82, 0x99, 0x05, 0x01, 0x02, 0x03, 0x09, 0x0a};
+    s.fake.send(IPC_SAT_PROACTIVE_CMD, IPC_TYPE_INDI, frame);
+    s.loop.runUntil([] { return false; }, std::chrono::milliseconds(30));
+    CHECK(commands.empty());
+
+    s.sat.clientRunning();
+    CHECK(commands.size() == 1 && commands[0] == Bytes(frame.begin() + 2, frame.end()));
+
+    // The terminal response goes out at full size with its length first;
+    // the card's 90 00 ends the session, and is no new command
+    const Bytes response = {0x81, 0x03, 0x01, 0x05, 0x00, 0x82, 0x02, 0x82, 0x81, 0x83, 0x01, 0x00};
+    std::optional<bool> sent;
+    s.sat.terminalResponse(response, [&](bool ok) { sent = ok; });
+    CHECK(s.loop.runUntil([&] { return sent.has_value() && ended == 1; }));
+    CHECK(*sent && commands.size() == 1);
+    Message request;
+    for (const Message &m : s.fake.received)
+        if (m.command == IPC_SAT_PROACTIVE_CMD)
+            request = m;
+    CHECK(request.type == IPC_TYPE_GET);
+    CHECK(request.data.size() == 1 + IPC_SAT_TERMINAL_RESPONSE_MAX && request.data[0] == 12);
+    CHECK(std::equal(response.begin(), response.end(), request.data.begin() + 1));
+}
+
+TEST(sim_toolkit_envelope_returns_the_cards_answer)
+{
+    for (bool withSequence : {true, false}) {
+        Stack s;
+        int ended = 0;
+        s.sat.onSessionEnd([&] { ended++; });
+        CHECK(s.booted());
+        s.fake.envelopeAnswersWithSequence = withSequence;
+
+        // A menu selection the card accepts: the answer, then the end
+        std::optional<EnvelopeResult> result;
+        s.sat.envelope({0xd3, 0x07, 0x82, 0x02, 0x01, 0x81, 0x90, 0x01, 0x01},
+                       [&](std::optional<EnvelopeResult> r) { result = std::move(r); });
+        CHECK(s.loop.runUntil([&] { return result.has_value() && ended == 1; }));
+        CHECK(result->sw1 == 0x90 && result->sw2 == 0 && result->data == (Bytes{0xaa, 0xbb}));
+        size_t size = 0;
+        for (const Message &m : s.fake.received)
+            if (m.command == IPC_SAT_ENVELOPE_CMD)
+                size = m.data.size();
+        CHECK(size == 1 + IPC_SAT_ENVELOPE_MAX);
+    }
 }
 
 TEST(a_running_modem_is_taken_over)

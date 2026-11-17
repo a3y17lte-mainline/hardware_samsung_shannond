@@ -28,6 +28,7 @@ cc_library_static {
         "core/netlink.cc",
         "core/network.cc",
         "core/nv.cc",
+        "core/sat.cc",
         "core/ports.cc",
         "core/sim.cc",
         "core/sms.cc",

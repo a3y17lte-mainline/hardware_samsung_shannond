@@ -4,6 +4,7 @@
 // base and overrides what the core supports.
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 
@@ -86,6 +87,11 @@ class RadioSim : public NotSupportedSim {
     ::ndk::ScopedAStatus iccTransmitApduLogicalChannel(int32_t serial,
                                                        const sim::SimApdu &message) override;
     ::ndk::ScopedAStatus reportStkServiceIsRunning(int32_t serial) override;
+    ::ndk::ScopedAStatus sendEnvelope(int32_t serial, const std::string &contents) override;
+    ::ndk::ScopedAStatus sendEnvelopeWithStatus(int32_t serial,
+                                                const std::string &contents) override;
+    ::ndk::ScopedAStatus sendTerminalResponseToSim(int32_t serial,
+                                                   const std::string &contents) override;
     ::ndk::ScopedAStatus requestIccSimAuthentication(int32_t serial, int32_t authContext,
                                                      const std::string &authData,
                                                      const std::string &aid) override;
@@ -96,6 +102,8 @@ class RadioSim : public NotSupportedSim {
     void transmit(int32_t serial, const sim::SimApdu &message, bool logical);
 
     std::shared_ptr<Stack> stack_;
+    // The framework's SIM toolkit service has said it runs (binder threads and the core's)
+    std::atomic<bool> stkRunning_{false};
 };
 
 class RadioNetwork : public NotSupportedNetwork {

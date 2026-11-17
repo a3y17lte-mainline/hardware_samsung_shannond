@@ -103,6 +103,18 @@ RadioSim::RadioSim(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
         });
         if (auto i = indication())
             i->simStatusChanged(kUnsolicited);
+
+        // SIM toolkit: the commands are the framework's to read and answer
+        core.sat.onProactiveCommand([this](const Bytes &command) {
+            if (auto i = indication())
+                i->stkProactiveCommand(kUnsolicited, toHex(command));
+        });
+        core.sat.onSessionEnd([this] {
+            if (auto i = indication())
+                i->stkSessionEnd(kUnsolicited);
+        });
+        if (stkRunning_)
+            core.sat.clientRunning();
     });
 }
 
@@ -441,8 +453,80 @@ void RadioSim::transmit(int32_t serial, const sim::SimApdu &message, bool logica
 
 ::ndk::ScopedAStatus RadioSim::reportStkServiceIsRunning(int32_t serial)
 {
-    if (auto r = response())
-        r->reportStkServiceIsRunningResponse(ok(serial));
+    stack_->post([this, serial](Core *core) {
+        if (auto r = response())
+            r->reportStkServiceIsRunningResponse(ok(serial));
+        // Commands the card sent before now were kept for this moment
+        stkRunning_ = true;
+        if (core)
+            core->sat.clientRunning();
+    });
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioSim::sendTerminalResponseToSim(int32_t serial,
+                                                         const std::string &contents)
+{
+    stack_->post([this, serial, contents](Core *core) {
+        auto bytes = fromHex(contents);
+        if (!core || !bytes) {
+            if (auto r = response())
+                r->sendTerminalResponseToSimResponse(
+                        core ? responseInfo(serial, RadioError::INVALID_ARGUMENTS)
+                             : notAvailable(serial));
+            return;
+        }
+        core->sat.terminalResponse(*bytes, [this, serial](bool success) {
+            if (auto r = response())
+                r->sendTerminalResponseToSimResponse(success ? ok(serial) : failed(serial));
+        });
+    });
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioSim::sendEnvelope(int32_t serial, const std::string &contents)
+{
+    stack_->post([this, serial, contents](Core *core) {
+        auto bytes = fromHex(contents);
+        if (!core || !bytes) {
+            if (auto r = response())
+                r->sendEnvelopeResponse(core ? responseInfo(serial, RadioError::INVALID_ARGUMENTS)
+                                             : notAvailable(serial),
+                                        {});
+            return;
+        }
+        core->sat.envelope(*bytes, [this, serial](std::optional<EnvelopeResult> result) {
+            if (auto r = response())
+                r->sendEnvelopeResponse(result ? ok(serial) : failed(serial),
+                                        result ? toHex(result->data) : std::string());
+        });
+    });
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioSim::sendEnvelopeWithStatus(int32_t serial, const std::string &contents)
+{
+    stack_->post([this, serial, contents](Core *core) {
+        auto bytes = fromHex(contents);
+        if (!core || !bytes) {
+            if (auto r = response())
+                r->sendEnvelopeWithStatusResponse(
+                        core ? responseInfo(serial, RadioError::INVALID_ARGUMENTS)
+                             : notAvailable(serial),
+                        {});
+            return;
+        }
+        core->sat.envelope(*bytes, [this, serial](std::optional<EnvelopeResult> result) {
+            sim::IccIoResult io;
+            if (result) {
+                io.sw1 = result->sw1;
+                io.sw2 = result->sw2;
+                io.simResponse = toHex(result->data);
+            }
+            if (auto r = response())
+                r->sendEnvelopeWithStatusResponse(result ? ok(serial) : failed(serial), io);
+        });
+    });
     return ::ndk::ScopedAStatus::ok();
 }
 

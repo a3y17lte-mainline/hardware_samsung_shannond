@@ -193,7 +193,11 @@ void Modem::handle(const Message &message)
                     return;
                 }
             } else if (message.command == pending.command &&
-                       message.type == IPC_TYPE_RESP) {
+                       (message.type == IPC_TYPE_RESP ||
+                        // Some commands are answered by a notification that
+                        // carries the request's sequence number
+                        (message.type == IPC_TYPE_NOTI && message.aseq &&
+                         pending.type == IPC_TYPE_EXEC))) {
                 Result result;
                 result.ok = true;
                 result.response = &message;

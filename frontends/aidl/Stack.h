@@ -18,6 +18,7 @@
 #include "core/loop.h"
 #include "core/modem.h"
 #include "core/network.h"
+#include "core/sat.h"
 #include "core/nv.h"
 #include "core/sim.h"
 #include "core/sms.h"
@@ -43,6 +44,7 @@ struct Core {
     Data data;
     Sms sms;
     Calls calls;
+    Sat sat;
     uint8_t supportedModes = 0;  // what the modem accepted when probed
 };
 

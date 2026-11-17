@@ -48,6 +48,8 @@ public:
     // Send RFS messages in pieces of this size, as the real modem's long
     // ones arrive (0: whole)
     size_t rfsChunk = 0;
+    // Whether the answer to a SIM toolkit envelope names its request
+    bool envelopeAnswersWithSequence = true;
 
     size_t count(uint16_t command) const;
 
