@@ -96,6 +96,11 @@ void Ims::setEnabled(bool enabled)
         return;
     enabled_ = enabled;
     log(enabled ? "VoLTE on" : "VoLTE off");
+    // Switched on by hand: no wait for the retry after an earlier stop
+    if (enabled && phase_ == Phase::Off && timer_) {
+        loop_.cancel(timer_);
+        timer_ = 0;
+    }
     evaluate();
 }
 
