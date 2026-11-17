@@ -97,20 +97,15 @@ std::optional<CodecInfo> codecInfo(const Codec &c)
     return info;
 }
 
-// RFC 4733 event code of a DTMF digit
+// The event code of a DTMF digit (RFC 4733), as stock converts it
+// (ImsTelephonyService convertDtmfToCode): 0-9, * and #; A-D never go out
 int dtmfCode(char digit)
 {
     if (digit >= '0' && digit <= '9')
         return digit - '0';
-    switch (digit) {
-    case '*': return 10;
-    case '#': return 11;
-    case 'A': case 'a': return 12;
-    case 'B': case 'b': return 13;
-    case 'C': case 'c': return 14;
-    case 'D': case 'd': return 15;
-    }
-    return -1;
+    if (digit == '*')
+        return 10;
+    return digit == '#' ? 11 : -1;
 }
 
 bool sameAddresses(const MediaSetup &a, const MediaSetup &b)

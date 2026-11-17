@@ -54,7 +54,7 @@ public:
     virtual void open(const MediaSetup &setup, std::function<void(std::optional<int> channel)> done) = 0;
     virtual void update(int channel, const MediaSetup &setup, Done done) = 0;
     virtual void close(int channel, Done done) = 0;
-    // A DTMF digit (0-9, *, #, A-D) as an RTP event (RFC 4733)
+    // A DTMF digit (0-9, *, #) as an RTP event (RFC 4733)
     virtual void dtmf(int channel, char digit, Done done) = 0;
     void onEvents(MediaEvents events) { events_ = std::move(events); }
 

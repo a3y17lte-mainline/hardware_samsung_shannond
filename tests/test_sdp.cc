@@ -273,6 +273,9 @@ TEST(voice_engine_call)
     sentDigit.reset();
     b.engine.dtmf(0, 'x', [&](bool ok) { sentDigit = ok; });
     CHECK(sentDigit == false);
+    sentDigit.reset();
+    b.engine.dtmf(0, 'A', [&](bool ok) { sentDigit = ok; });  // stock sends 0-9, * and # only
+    CHECK(sentDigit == false);
 
     // A dedicated bearer for voice
     std::vector<std::tuple<int, int, bool>> bearers;
