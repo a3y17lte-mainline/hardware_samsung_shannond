@@ -42,12 +42,30 @@ std::array<uint8_t, N> arr(const unsigned char *p)
 
 }  // namespace
 
+namespace {
+
+// The IMS link's own routing table and the rule to it, before Android's
+// rules (netd's start at 10000)
+constexpr uint32_t kImsTableBase = 0x5300;
+constexpr uint32_t kImsRulePriority = 9000;
+
+void dropImsRules(unsigned int cid, const std::string &iface)
+{
+    // Every copy: an earlier instance may have left its own
+    for (int family : {AF_INET, AF_INET6})
+        for (int i = 0; i < 8 && deleteDeviceRule(iface, family, kImsTableBase + cid, kImsRulePriority); i++) {
+        }
+}
+
+}  // namespace
+
 DataLinks DataLinks::wwan(const std::string &wwanDevice)
 {
     DataLinks links;
     links.up = [wwanDevice](DataCall &call) {
         const std::string iface = ifaceName(call.cid);
         call.iface = iface;
+        dropImsRules(call.cid, iface);
         // A link left from an earlier call still has that call's addresses
         if (linkExists(iface))
             deleteLink(iface);
@@ -65,13 +83,31 @@ DataLinks DataLinks::wwan(const std::string &wwanDevice)
             if (!addAddress(iface, AF_INET6, ll.data(), 64))
                 return false;
         }
-        return setLinkUp(iface, true);
+        if (!setLinkUp(iface, true))
+            return false;
+        // Our own IMS PDN is routed by us: the SIP sockets are bound to the
+        // device. (A context Android asked for is routed by Android.)
+        if (call.ims) {
+            const uint32_t table = kImsTableBase + call.cid;
+            for (int family : {AF_INET, AF_INET6}) {
+                if (family == AF_INET ? !call.ipv4 : !call.ipv6InterfaceId)
+                    continue;
+                addDefaultRoute(iface, family, table);
+                addDeviceRule(iface, family, table, kImsRulePriority);
+            }
+        }
+        return true;
     };
-    links.down = [](unsigned int, const std::string &iface) { deleteLink(iface); };
+    links.down = [](unsigned int cid, const std::string &iface) {
+        dropImsRules(cid, iface);
+        deleteLink(iface);
+    };
     links.reset = [] {
-        for (unsigned int cid = 1; cid <= kDataChannels; cid++)
+        for (unsigned int cid = 1; cid <= kDataChannels; cid++) {
+            dropImsRules(cid, ifaceName(cid));
             if (linkExists(ifaceName(cid)))
                 deleteLink(ifaceName(cid));
+        }
     };
     return links;
 }

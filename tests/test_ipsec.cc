@@ -65,6 +65,27 @@ bool namespaceReady()
 
 }  // namespace
 
+TEST(netlink_device_table)
+{
+    // A link's own routing table and the rule for sockets bound to it, as
+    // the IMS PDN gets them
+    if (!namespaceReady()) {
+        std::printf("    skipped: needs its own network namespace (unshare -rn)\n");
+        return;
+    }
+    const uint32_t table = 0x5301, priority = 9000;
+    for (int family : {AF_INET, AF_INET6}) {
+        std::string error;
+        CHECK(addDefaultRoute("lo", family, table, &error));
+        CHECK(addDefaultRoute("lo", family, table));  // replaced, not doubled
+        CHECK(addDeviceRule("lo", family, table, priority, &error));
+        CHECK(!addDeviceRule("lo", family, table, priority));  // already there
+        CHECK(deleteDeviceRule("lo", family, table, priority));
+        CHECK(!deleteDeviceRule("lo", family, table, priority));  // gone
+    }
+    CHECK(!addDefaultRoute("no-such-link", AF_INET6, table));
+}
+
 TEST(ipsec_register_over_esp)
 {
     if (!namespaceReady()) {

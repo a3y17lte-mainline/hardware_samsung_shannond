@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// Just enough rtnetlink to add, remove and switch WWAN links.
+// Just enough rtnetlink to add, remove and switch WWAN links, and to give a
+// link its own routing table.
 #include "core/ports.h"
 
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <linux/fib_rules.h>
 #include <linux/if_addr.h>
 #include <linux/if_link.h>
 #include <linux/netlink.h>
@@ -33,6 +35,8 @@ public:
     nlmsghdr *header() { return reinterpret_cast<nlmsghdr *>(buffer_); }
     ifinfomsg *info() { return static_cast<ifinfomsg *>(NLMSG_DATA(header())); }
     ifaddrmsg *address() { return static_cast<ifaddrmsg *>(NLMSG_DATA(header())); }
+    rtmsg *route() { return static_cast<rtmsg *>(NLMSG_DATA(header())); }
+    fib_rule_hdr *rule() { return static_cast<fib_rule_hdr *>(NLMSG_DATA(header())); }
 
     rtattr *add(uint16_t type, const void *data, size_t length)
     {
@@ -151,6 +155,53 @@ bool addAddress(const std::string &name, int family, const uint8_t *address,
 bool linkExists(const std::string &name)
 {
     return if_nametoindex(name.c_str()) != 0;
+}
+
+bool addDefaultRoute(const std::string &name, int family, uint32_t table, std::string *error)
+{
+    const uint32_t index = if_nametoindex(name.c_str());
+    if (!index) {
+        if (error)
+            *error = std::strerror(ENODEV);
+        return false;
+    }
+    Request request(RTM_NEWROUTE, NLM_F_CREATE | NLM_F_REPLACE, sizeof(rtmsg));
+    request.route()->rtm_family = static_cast<uint8_t>(family);
+    request.route()->rtm_table = RT_TABLE_UNSPEC;
+    request.route()->rtm_protocol = RTPROT_STATIC;
+    // A raw IP point to point link: no gateway
+    request.route()->rtm_scope = family == AF_INET ? RT_SCOPE_LINK : RT_SCOPE_UNIVERSE;
+    request.route()->rtm_type = RTN_UNICAST;
+    request.add(RTA_OIF, &index, sizeof(index));
+    request.add(RTA_TABLE, &table, sizeof(table));
+    return request.send(error);
+}
+
+namespace {
+
+bool deviceRule(uint16_t type, uint16_t flags, const std::string &name, int family, uint32_t table,
+                uint32_t priority, std::string *error)
+{
+    Request request(type, flags, sizeof(fib_rule_hdr));
+    request.rule()->family = static_cast<uint8_t>(family);
+    request.rule()->table = RT_TABLE_UNSPEC;
+    request.rule()->action = FR_ACT_TO_TBL;
+    request.add(FRA_OIFNAME, name.c_str(), name.size() + 1);
+    request.add(FRA_TABLE, &table, sizeof(table));
+    request.add(FRA_PRIORITY, &priority, sizeof(priority));
+    return request.send(error);
+}
+
+}  // namespace
+
+bool addDeviceRule(const std::string &name, int family, uint32_t table, uint32_t priority, std::string *error)
+{
+    return deviceRule(RTM_NEWRULE, NLM_F_CREATE | NLM_F_EXCL, name, family, table, priority, error);
+}
+
+bool deleteDeviceRule(const std::string &name, int family, uint32_t table, uint32_t priority, std::string *error)
+{
+    return deviceRule(RTM_DELRULE, 0, name, family, table, priority, error);
 }
 
 }  // namespace shannond

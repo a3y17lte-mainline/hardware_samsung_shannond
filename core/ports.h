@@ -35,4 +35,14 @@ bool addAddress(const std::string &name, int family, const uint8_t *address,
                 unsigned int prefixLength, std::string *error = nullptr);
 bool linkExists(const std::string &name);
 
+// A routing table of its own for a link: a default route through the device
+// (no gateway: raw IP), and a rule that sends the sockets bound to the device
+// (SO_BINDTODEVICE) to that table. For a link nobody else routes: Android's
+// netd ends its rules with "unreachable" and knows nothing of our IMS PDN.
+bool addDefaultRoute(const std::string &name, int family, uint32_t table, std::string *error = nullptr);
+bool addDeviceRule(const std::string &name, int family, uint32_t table, uint32_t priority,
+                   std::string *error = nullptr);
+bool deleteDeviceRule(const std::string &name, int family, uint32_t table, uint32_t priority,
+                      std::string *error = nullptr);
+
 }  // namespace shannond
