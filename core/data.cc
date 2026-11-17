@@ -127,13 +127,43 @@ void Data::connect(unsigned int cid, const DataProfile &profile, Done done)
     calls_[cid] = DataCall{};
     calls_[cid].cid = cid;
     calls_[cid].ims = profile.ims;
-    activate(cid, profile, 0);
+    sendProfile(cid, profile);
 
     modem_.loop().after(kConnectTimeout, [this, cid] {
         if (pending_.count(cid)) {
             modem_.log("data call %u: no IP configuration", cid);
             complete(cid, false);
         }
+    });
+}
+
+// The profile first (0x0D1B), as the stock RIL defines each of the framework's
+// profiles: the modem's voice engine finds the IMS PDN by its name. Not
+// fatal: plain data works without it.
+void Data::sendProfile(unsigned int cid, const DataProfile &profile)
+{
+    uint8_t type = IPC_GPRS_PDP_TYPE_IPV4V6, pcscf = IPC_GPRS_PCSCF_REQUEST_IPV4V6;
+    if (profile.protocol == IpProtocol::Ipv4) {
+        type = IPC_GPRS_PDP_TYPE_IPV4;
+        pcscf = IPC_GPRS_PCSCF_REQUEST_IPV4;
+    } else if (profile.protocol == IpProtocol::Ipv6) {
+        type = IPC_GPRS_PDP_TYPE_IPV6;
+        pcscf = IPC_GPRS_PCSCF_REQUEST_IPV6;
+    }
+    ipc_gprs_set_apn_info_data info;
+    if (ipc_gprs_set_apn_info_setup(&info, profile.ims ? IPC_GPRS_PROFILE_IMS : IPC_GPRS_PROFILE_DEFAULT,
+                                    profile.ims ? "lte_ims" : "lte_internet", type, profile.apn.c_str(),
+                                    profile.username.c_str(), profile.password.c_str(),
+                                    profile.auth, profile.ims ? pcscf : IPC_GPRS_PCSCF_REQUEST_NONE) < 0) {
+        complete(cid, false);
+        return;
+    }
+    modem_.request(IPC_GPRS_SET_APN_INFO, IPC_TYPE_SET, info, [this, cid, profile](const Result &r) {
+        if (!pending_.count(cid))
+            return;
+        if (!r.ok)
+            modem_.log("data call %u: profile refused (%#x)", cid, r.code);
+        activate(cid, profile, 0);
     });
 }
 
@@ -174,9 +204,14 @@ void Data::activate(unsigned int cid, const DataProfile &profile, int attempt)
             return;
         }
 
+        // The IMS PDN activates as such, as stock: the modem's voice engine
+        // finds it by that mark
         ipc_gprs_pdp_context_request_set_data set;
-        ipc_gprs_pdp_context_request_set_setup(&set, 1, cid, profile.username.c_str(),
-                                               profile.password.c_str());
+        if (profile.ims)
+            ipc_gprs_pdp_context_request_set_setup(&set, IPC_GPRS_PDP_CONTEXT_ACTIVATE_IMS, cid, nullptr, nullptr);
+        else
+            ipc_gprs_pdp_context_request_set_setup(&set, IPC_GPRS_PDP_CONTEXT_ACTIVATE, cid,
+                                                   profile.username.c_str(), profile.password.c_str());
         modem_.request(IPC_GPRS_PDP_CONTEXT, IPC_TYPE_SET, set,
                        [this, cid, profile, attempt](const Result &r2) {
             if (!pending_.count(cid) || r2.ok)

@@ -328,15 +328,24 @@ TEST(ims_brings_up_pdn_registers_and_tells_the_modem)
     ims.setEnabled(true);
     CHECK(loop.runUntil([&] { return ims.registered(); }));
 
-    // The PDN: IPv6 with a P-CSCF request, on the IMS context
-    bool defined = false;
+    // The PDN: the lte_ims profile, then IPv6 with a P-CSCF request on the
+    // IMS context (cid 1, as stock)
+    bool profile = false, defined = false;
     for (const auto &m : fake.received)
-        if (m.command == IPC_GPRS_DEFINE_PDP_CONTEXT) {
+        if (m.command == IPC_GPRS_SET_APN_INFO) {
+            auto p = m.as<ipc_gprs_set_apn_info_data>();
+            profile = p && p->profile_id == IPC_GPRS_PROFILE_IMS && std::string(p->name) == "lte_ims" &&
+                      p->protocol == IPC_GPRS_PDP_TYPE_IPV6 && p->pcscf == IPC_GPRS_PCSCF_REQUEST_IPV6 &&
+                      std::string(p->apn) == "ims" && !defined;
+        } else if (m.command == IPC_GPRS_DEFINE_PDP_CONTEXT) {
             auto d = m.as<ipc_gprs_define_pdp_context_ext_data>();
-            defined = d && d->cid == 3 && d->type == IPC_GPRS_PDP_TYPE_IPV6 &&
+            defined = d && d->cid == 1 && d->type == IPC_GPRS_PDP_TYPE_IPV6 &&
                       d->pcscf == IPC_GPRS_PCSCF_REQUEST_IPV6 && std::string(d->apn) == "ims";
         }
-    CHECK(defined);
+    CHECK(profile && defined);
+    // Activated as the IMS PDN (mode 3), else the modem's voice engine
+    // refuses it (0x8001, seen on the phone)
+    CHECK(fake.imsContexts.count(1) == 1);
     // The ISIM's identities: the SIP IMPU registers, the IMPI authenticates
     bool fromIsim = false;
     for (const auto &m : pcscf.requests)
@@ -370,7 +379,7 @@ TEST(ims_brings_up_pdn_registers_and_tells_the_modem)
     auto released = [&] {
         for (const auto &m : fake.received)
             if (m.command == IPC_GPRS_PDP_CONTEXT)
-                if (auto s = m.as<ipc_gprs_pdp_context_request_set_data>(); s && s->cid == 3 && !s->enable)
+                if (auto s = m.as<ipc_gprs_pdp_context_request_set_data>(); s && s->cid == 1 && !s->enable)
                     return true;
         return false;
     };

@@ -614,6 +614,23 @@ void FakeModem::handle(const Message &r)
         send(IPC_GEN_PHONE_RES, IPC_TYPE_RESP, toBytes(res), r.mseq);
         return;
     }
+    case IPC_GPRS_SET_APN_INFO: {
+        auto info = r.as<ipc_gprs_set_apn_info_data>();
+        if (r.type != IPC_TYPE_SET || !info) {
+            ack(r, false);
+            return;
+        }
+        profileNames.insert(std::string(info->name, strnlen(info->name, sizeof(info->name))));
+        ack(r);
+        return;
+    }
+    case IPC_IMS_PDN: {
+        auto pdn = r.as<ipc_ims_pdn_data>();
+        const std::string name(pdn ? std::string(pdn->ifname, strnlen(pdn->ifname, sizeof(pdn->ifname))) : "");
+        ack(r, r.type == IPC_TYPE_SET && pdn && profileNames.count(name) &&
+                       (name != "lte_ims" || !imsContexts.empty()));
+        return;
+    }
     case IPC_GPRS_PDP_CONTEXT: {
         auto set = r.as<ipc_gprs_pdp_context_request_set_data>();
         if (r.type != IPC_TYPE_SET || !set) {
@@ -621,6 +638,10 @@ void FakeModem::handle(const Message &r)
             return;
         }
         ack(r);
+        if (set->enable == IPC_GPRS_PDP_CONTEXT_ACTIVATE_IMS)
+            imsContexts.insert(set->cid);
+        else
+            imsContexts.erase(set->cid);
 
         ipc_gprs_call_status_ext_data status{};
         status.cid = set->cid;

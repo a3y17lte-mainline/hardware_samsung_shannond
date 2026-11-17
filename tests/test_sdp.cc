@@ -180,10 +180,19 @@ TEST(voice_engine_call)
 {
     EngineBench b;
     std::optional<bool> prepared;
+    // Without the lte_ims data profile the modem refuses the PDN (0x8001,
+    // seen on the phone)
+    b.engine.prepare("2001:db8::5", "ims", [&](bool ok) { prepared = ok; });
+    CHECK(b.loop.runUntil([&] { return prepared.has_value(); }) && !*prepared);
+    auto engineOn = b.sent(IPC_IMS_ENGINE);
+    CHECK(engineOn.size() == 1 && engineOn[0]->data == Bytes({IPC_IMS_ENGINE_ON, 0xd2}));
+    b.fake.profileNames.insert("lte_ims");
+    b.fake.imsContexts.insert(1);
+    b.fake.received.clear();
+    prepared.reset();
     b.engine.prepare("2001:db8::5", "ims", [&](bool ok) { prepared = ok; });
     CHECK(b.loop.runUntil([&] { return prepared.has_value(); }) && *prepared);
-    auto engine = b.sent(IPC_IMS_ENGINE);
-    CHECK(engine.size() == 1 && engine[0]->data == Bytes({IPC_IMS_ENGINE_ON, 0xd2}));
+    CHECK(b.sent(IPC_IMS_ENGINE).empty());  // on since the first try
     auto pdn = b.sent(IPC_IMS_PDN);
     CHECK(pdn.size() == 1);
     auto p = pdn[0]->as<ipc_ims_pdn_data>();
@@ -194,7 +203,7 @@ TEST(voice_engine_call)
     prepared.reset();
     b.engine.prepare("2001:db8::5", "ims", [&](bool ok) { prepared = ok; });
     CHECK(b.loop.runUntil([&] { return prepared.has_value(); }) && *prepared);
-    CHECK(b.sent(IPC_IMS_ENGINE).size() == 1 && b.sent(IPC_IMS_PDN).size() == 2);
+    CHECK(b.sent(IPC_IMS_ENGINE).empty() && b.sent(IPC_IMS_PDN).size() == 2);
 
     CHECK(b.engine.allocatePort() == 1234 && b.engine.allocatePort() == 1236);
     b.engine.releasePort(1234);
@@ -237,7 +246,7 @@ TEST(voice_engine_call)
     for (const Message &m : all)
         if ((m.command >> 8) == IPC_GROUP_IMS)
             order.push_back(m.command);
-    CHECK((order == std::vector<uint16_t>{IPC_IMS_ENGINE, IPC_IMS_PDN, IPC_IMS_PDN, IPC_IMS_PDN, IPC_IMS_CHANNEL,
+    CHECK((order == std::vector<uint16_t>{IPC_IMS_PDN, IPC_IMS_PDN, IPC_IMS_PDN, IPC_IMS_CHANNEL,
                                           IPC_IMS_CHANNEL, IPC_IMS_CODEC, IPC_IMS_OPTION, IPC_IMS_DTMF,
                                           IPC_IMS_RTP_MEDIA}));
 

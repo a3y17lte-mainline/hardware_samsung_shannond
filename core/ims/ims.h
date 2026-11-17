@@ -34,7 +34,10 @@ public:
         // Connect the IMS PDN ourselves (Linux) or wait for one (Android,
         // where telephony brings it up)
         bool ownPdn = true;
-        unsigned pdnCid = 3;
+        // As the stock RIL (GetCidFromApnType: IMS 1, internet 2): the
+        // modem's voice engine takes the IMS PDN only on the context of
+        // the IMS profile's id
+        unsigned pdnCid = 1;
         // The phone as its stock firmware names itself (User-Agent)
         DeviceInfo device;
         // A profile for any network (trying an unknown one by hand)

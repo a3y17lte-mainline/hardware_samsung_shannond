@@ -90,6 +90,7 @@ public:
 private:
     void ipConfiguration(const Message &message);
     void callStatus(const Message &message);
+    void sendProfile(unsigned int cid, const DataProfile &profile);
     void activate(unsigned int cid, const DataProfile &profile, int attempt);
     void complete(unsigned int cid, bool ok);
     void notify(const DataCall &call);

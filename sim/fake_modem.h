@@ -74,6 +74,12 @@ public:
     bool volteSupported = true;
     // The IPv4 P-CSCF every data call gets
     std::array<uint8_t, 4> pcscf4{10, 0, 0, 80};
+    // Data profile names the AP defined (IPC_GPRS_SET_APN_INFO); the voice
+    // engine refuses a PDN whose name is not among them (0x8001)
+    std::set<std::string> profileNames;
+    // Contexts activated as the IMS PDN (activation mode 3): the voice
+    // engine takes lte_ims only when one is up, as the real modem
+    std::set<uint8_t> imsContexts;
     static sim::Milenage testMilenage();
 
     size_t count(uint16_t command) const;
