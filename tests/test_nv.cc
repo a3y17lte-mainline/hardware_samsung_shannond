@@ -3,6 +3,7 @@
 // The NV store and the RFS service, on a temporary file.
 #include <cstdlib>
 #include <fstream>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "core/modem.h"
@@ -63,6 +64,20 @@ TEST(nv_store_reads_writes_and_keeps_the_checksum)
     CHECK(nv.valid());
     CHECK(*nv.read(0x20, 2) == (Bytes{0xde, 0xad}));
     CHECK(!nv.write(kSize - 1, Bytes{1, 2}));
+}
+
+TEST(nv_store_keeps_the_files_mode)
+{
+    // The files belong to the radio service; whoever writes them keeps
+    // their owner and mode (the owner needs root to test)
+    TempNv tmp;
+    chmod(tmp.path.c_str(), 0640);
+    chmod((tmp.path + ".md5").c_str(), 0604);
+    NvStore nv(tmp.path, kSize);
+    CHECK(nv.write(0x20, Bytes{1, 2}));
+    struct stat st;
+    CHECK(stat(tmp.path.c_str(), &st) == 0 && (st.st_mode & 07777) == 0640);
+    CHECK(stat((tmp.path + ".md5").c_str(), &st) == 0 && (st.st_mode & 07777) == 0604);
 }
 
 TEST(nv_store_detects_a_bad_checksum)

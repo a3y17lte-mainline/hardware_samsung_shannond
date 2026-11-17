@@ -45,6 +45,18 @@ bool writeFileAtomic(const std::string &path, const void *data, size_t size)
     if (fd < 0)
         return false;
 
+    // Keep the owner and mode of the file this replaces (or the
+    // directory's owner for a new one): a client running as root must not
+    // leave files the radio service cannot read or write
+    struct stat st;
+    const std::string dir = path.substr(0, path.find_last_of('/') == std::string::npos ? 0 : path.find_last_of('/'));
+    if (stat(path.c_str(), &st) == 0) {
+        (void)!fchown(fd, st.st_uid, st.st_gid);
+        (void)!fchmod(fd, st.st_mode & 07777);
+    } else if (stat(dir.empty() ? "." : dir.c_str(), &st) == 0) {
+        (void)!fchown(fd, st.st_uid, st.st_gid);
+    }
+
     const auto *p = static_cast<const uint8_t *>(data);
     size_t done = 0;
     while (done < size) {
