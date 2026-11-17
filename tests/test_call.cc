@@ -760,9 +760,10 @@ TEST(call_incoming_cancelled_and_reinvited)
         if (!m.isRequest() && m.status() == 200 && m.cseq()->first == 2)
             answer = m;
     CHECK(answer && Sdp::parse(answer->body)->direction == Direction::RecvOnly);
-    CHECK(b.waitFor([&] { return b.media.updates >= 1 && !b.media.channels.begin()->second.active; }));
+    // Held by the far end we still receive (its music): the stream runs,
+    // and no RTP ends the call
+    CHECK(b.waitFor([&] { return b.media.updates >= 1 && b.media.channels.begin()->second.active; }));
 
-    // Held by the far end we still receive (its music): no RTP ends the call
     b.media.rtpTimeout(b.media.channels.begin()->first);
     CHECK(b.waitFor([&] { return b.count("BYE") == 1; }));
     CHECK(b.call(id)->state == ImsCallState::Ended && b.call(id)->endReason == "RTP timeout");

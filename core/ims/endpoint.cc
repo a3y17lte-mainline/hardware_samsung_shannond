@@ -205,7 +205,7 @@ void SipEndpoint::closeProtected()
         if (c->flow != Flow::Plain)
             drops.push_back(fd);
     for (int fd : drops)
-        drop(fd);
+        drop(fd, true);
     for (int fd : {current_->clientUdp, current_->serverUdp, current_->serverTcp}) {
         loop_.unwatch(fd);
         close(fd);
@@ -395,19 +395,32 @@ void SipEndpoint::writeTcp(int fd)
     });
 }
 
-void SipEndpoint::drop(int fd)
+void SipEndpoint::drop(int fd, bool ours)
 {
     auto it = connections_.find(fd);
     if (it == connections_.end())
         return;
+    // A request that went out whole can still be answered over a new
+    // connection to our Via port (RFC 3261 18.2.2), unless we close the flow
+    const bool unsent = ours || !it->second->connected || !it->second->out.empty();
+    if (ours) {
+        // Closed with a reset: the flow's next connection (new security
+        // associations, the same ports) must not meet this one in TIME_WAIT
+        const linger now{1, 0};
+        setsockopt(fd, SOL_SOCKET, SO_LINGER, &now, sizeof(now));
+    }
     loop_.unwatch(fd);
     close(fd);
     connections_.erase(it);
-    // Client transactions waiting on this connection fail
+    // Client transactions whose request was lost with this connection fail
     std::vector<std::string> failed;
     for (auto &[key, t] : clients_)
-        if (t->connection == fd)
-            failed.push_back(key);
+        if (t->connection == fd) {
+            if (unsent)
+                failed.push_back(key);
+            else
+                t->connection = -1;
+        }
     for (const auto &key : failed)
         timeout(key);
 }

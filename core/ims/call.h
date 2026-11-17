@@ -90,6 +90,7 @@ public:
     void handleStrayResponse(const SipMessage &response);
 
     // Front-end requests
+    // number: with #31# in front the call hides our number (CLIR)
     std::optional<int> dial(const std::string &number);
     bool answer(int id);
     bool hangup(int id);  // ends, cancels or rejects

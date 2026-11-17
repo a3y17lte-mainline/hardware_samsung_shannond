@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "core/alarm.h"
 #include "core/data.h"
 #include "core/ims/call.h"
 #include "core/ims/endpoint.h"
@@ -56,6 +57,10 @@ public:
         bool ignoreVops = false;
         std::chrono::milliseconds addressWait{30000};
         std::chrono::seconds pdnRetry{30};
+        // How long a lost condition of the network side (registration, LTE,
+        // voice over PS, the operator) may last before IMS stops: such
+        // changes are often momentary (stock delays its deregistration too)
+        std::chrono::milliseconds lossGrace{10000};
     };
 
     Ims(Modem &modem, Sim &sim, Network &network, Data &data, NetworkFactory factory);
@@ -128,6 +133,11 @@ private:
     std::unique_ptr<ImsRegistration> registration_;
     bool modemTold_ = false;  // the modem starts with no IMS registration
     EventLoop::TimerId timer_ = 0;
+    // The retry of a stopped or failed start: wakes a sleeping phone
+    AlarmTimer retry_;
+    EventLoop::TimerId srvccTimer_ = 0;  // runs while SRVCC is under way
+    EventLoop::TimerId lossTimer_ = 0;   // runs while a lost condition may still come back
+    bool lossExpired_ = false;
     std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
     SipEndpoint::RequestHandler requestHandler_;
     std::unique_ptr<VoiceEngine> voice_;

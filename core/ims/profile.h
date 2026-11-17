@@ -45,6 +45,8 @@ struct ImsProfile {
     unsigned minSe = 90;
     unsigned ringingTimer = 30;   // an incoming call rings this long (seconds)
     unsigned ringbackTimer = 32;  // an outgoing call waits this long for an answer
+    // An outgoing call may take this long to start ringing (our own value)
+    unsigned setupTimer = 60;
     // Media: the SDP and the modem's voice engine
     MediaCapabilities media;
     uint16_t audioPort = 1234;   // the first local RTP port
@@ -59,6 +61,8 @@ struct ImsProfile {
         std::vector<std::string> services;  // "mmtel", "smsip"
     };
     std::vector<Access> access{{"lte", {"mmtel"}}};
+    // VoLTE on other operators' networks (needs their roaming agreement)
+    bool roaming = false;
 
     bool offers(const std::string &accessType, const std::string &service) const;
 };
@@ -74,6 +78,8 @@ std::string userAgentFor(const ImsProfile &profile, const DeviceInfo &device);
 
 // The profile of a network, or nullptr: VoLTE only where it is known to work
 const ImsProfile *profileFor(const std::string &plmn);
+// The profile of the SIM's operator (its IMSI starts with the PLMN)
+const ImsProfile *profileForImsi(const std::string &imsi);
 // IR.92 defaults, for tests and for trying an unknown network by hand
 ImsProfile defaultProfile();
 

@@ -72,12 +72,28 @@ ImsProfile defaultProfile()
     return p;
 }
 
+namespace {
+const std::vector<ImsProfile> &profiles()
+{
+    static const std::vector<ImsProfile> all{telefonicaCz()};
+    return all;
+}
+}  // namespace
+
 const ImsProfile *profileFor(const std::string &plmn)
 {
-    static const ImsProfile profiles[] = {telefonicaCz()};
-    for (const auto &p : profiles)
+    for (const auto &p : profiles())
         if (std::find(p.plmns.begin(), p.plmns.end(), plmn) != p.plmns.end())
             return &p;
+    return nullptr;
+}
+
+const ImsProfile *profileForImsi(const std::string &imsi)
+{
+    for (const auto &p : profiles())
+        for (const auto &plmn : p.plmns)
+            if (imsi.starts_with(plmn))
+                return &p;
     return nullptr;
 }
 

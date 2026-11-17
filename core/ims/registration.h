@@ -147,8 +147,13 @@ private:
     std::string subToTag_;
     uint32_t subCseq_ = 0;
 
-    EventLoop::TimerId retryTimer_ = 0;
+    AlarmTimer retryTimer_;  // wakes a sleeping phone, as the refresh does
     AlarmTimer refreshTimer_;
+    AlarmTimer subTimer_;    // the reg event subscription's refresh
+    unsigned challenges_ = 0;  // 401s of this attempt
+    // Registrations the network ended, one soon after the other
+    unsigned ended_ = 0;
+    std::optional<std::chrono::steady_clock::time_point> lastEnded_;
     std::function<void()> stopped_;
 };
 

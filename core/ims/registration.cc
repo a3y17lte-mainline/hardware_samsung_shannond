@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "core/ims/registration.h"
 
+#include <arpa/inet.h>
+
 #include <algorithm>
 #include <charconv>
 #include <map>
@@ -46,6 +48,17 @@ std::string xmlAttribute(const std::string &body, size_t pos, const std::string 
     return b == std::string::npos ? std::string() : element.substr(a, b - a);
 }
 
+// Two hosts of a URI: addresses compare as addresses, whatever their spelling
+bool sameHost(const std::string &a, const std::string &b)
+{
+    for (int family : {AF_INET6, AF_INET}) {
+        unsigned char x[16] = {}, y[16] = {};
+        if (inet_pton(family, a.c_str(), x) == 1 && inet_pton(family, b.c_str(), y) == 1)
+            return std::equal(std::begin(x), std::end(x), std::begin(y));
+    }
+    return iequals(a, b);
+}
+
 // The stock stack's protected ports (UserAgentManager::AllocateUserIdentity):
 // a counter that steps by 100 for every user agent it creates, wrapping at
 // 10000 back to its start + 100; server port = counter, client port + 1
@@ -74,14 +87,13 @@ const char *registrationStateName(RegistrationState state)
 }
 
 ImsRegistration::ImsRegistration(EventLoop &loop, SipEndpoint &endpoint, ImsNetwork &network, AkaFn aka)
-    : loop_(loop), endpoint_(endpoint), network_(network), aka_(std::move(aka)), refreshTimer_(loop)
+    : loop_(loop), endpoint_(endpoint), network_(network), aka_(std::move(aka)), retryTimer_(loop), refreshTimer_(loop), subTimer_(loop)
 {
 }
 
 ImsRegistration::~ImsRegistration()
 {
     *alive_ = false;
-    loop_.cancel(retryTimer_);
     if (!pendingBranch_.empty())
         endpoint_.forget(pendingBranch_);
     clearSecurity();
@@ -129,7 +141,7 @@ void ImsRegistration::start(RegistrationParams params)
 
 void ImsRegistration::begin()
 {
-    retryTimer_ = 0;
+    challenges_ = 0;
     if (params_.pcscfs.empty() || !params_.identity.valid()) {
         failed(params_.pcscfs.empty() ? "no P-CSCF" : "no identity", false);
         return;
@@ -335,6 +347,11 @@ void ImsRegistration::challenged(const SipMessage &response, bool protectedFlow)
         failed("the network did not take the resynchronisation", true);
         return;
     }
+    // A resynchronisation takes two; more means our answers are not taken
+    if (++challenges_ > 3) {
+        failed("challenged again and again", true);
+        return;
+    }
     challenge_ = challenge;
     nc_ = 0;
     if (params_.profile.ipsec) {
@@ -389,12 +406,8 @@ void ImsRegistration::akaAnswered(AkaAnswer answer, unsigned expires)
         sendRegister(false, expires);
         return;
     }
-    if (sas_) {
-        // A challenged refresh: the stock stack finds an SA set on the same
-        // client port ("Vaild SA already exsits") and goes on with it; the
-        // SPIs it offered are not used
-        log("challenged again: keeping the security associations");
-        releaseReserved();
+    if (sas_ && !reservedUc_) {
+        // Challenged without an offer of ours out: nothing new to key
         sendRegister(true, expires);
         return;
     }
@@ -424,6 +437,15 @@ void ImsRegistration::akaAnswered(AkaAnswer answer, unsigned expires)
         return;
     }
     reservedUc_ = reservedUs_ = 0;  // owned by the SAs now
+    if (sas_) {
+        // A challenged refresh (33.203 7.4): the P-CSCF made a new set from
+        // this challenge and expects the answer over it. The ports stay,
+        // so the old set's sockets and associations go first.
+        log("challenged again: new security associations");
+        endpoint_.closeProtected();
+        network_.removeSas(*sas_);
+        sas_.reset();
+    }
     if (!endpoint_.openProtected(s)) {
         network_.removeSas(s);
         failed("no protected sockets", false);
@@ -453,21 +475,34 @@ void ImsRegistration::registered(const SipMessage &response)
         if (auto v = number(*e))
             expires = *v;
     const std::string mine = contactUri();
+    std::optional<unsigned> matched, shortest;
     for (const auto &c : response.headers("Contact")) {
         auto n = NameAddr::parse(c);
         if (!n)
             continue;
+        auto e = n->params.get("expires");
+        auto v = e ? number(*e) : std::nullopt;
+        if (!v)
+            continue;
+        if (!shortest || *v < *shortest)
+            shortest = *v;
         auto ours = Uri::parse(mine), theirs = Uri::parse(n->uri);
-        if (ours && theirs && ours->host == theirs->host && ours->port == theirs->port)
-            if (auto e = n->params.get("expires"))
-                if (auto v = number(*e))
-                    expires = *v;
+        if (ours && theirs && sameHost(ours->host, theirs->host) && ours->port == theirs->port)
+            matched = *v;
     }
+    // Our binding's expiry; if the network wrote our Contact in a way we do
+    // not recognise, the shortest one given (a refresh too early is harmless,
+    // one after the 600000 s asked for is not)
+    if (matched)
+        expires = *matched;
+    else if (shortest && !response.has("Expires"))
+        expires = *shortest;
     if (expires == 0) {
         failed("the network registered us for no time", true);
         return;
     }
     info_.expires = expires;
+    challenges_ = 0;
     info_.contact = contactHeader(expires);
     failures_ = 0;
     releaseReserved();
@@ -499,6 +534,7 @@ void ImsRegistration::failed(const std::string &why, bool nextPcscf, std::option
 {
     pendingBranch_.clear();
     refreshTimer_.cancel();
+    subTimer_.cancel();
     endpoint_.closeProtected();
     clearSecurity();
     if (nextPcscf)
@@ -506,9 +542,8 @@ void ImsRegistration::failed(const std::string &why, bool nextPcscf, std::option
     failures_++;
     auto delay = retryAfter.value_or(backoff(failures_));
     setState(RegistrationState::Registering, why + "; again in " + std::to_string(delay.count()) + " s");
-    loop_.cancel(retryTimer_);
     auto alive = alive_;
-    retryTimer_ = loop_.after(delay, [this, alive]() {
+    retryTimer_.start(delay, [this, alive]() {
         if (*alive)
             begin();
     });
@@ -529,9 +564,9 @@ void ImsRegistration::clearSecurity()
 
 void ImsRegistration::stop(std::function<void()> done)
 {
-    loop_.cancel(retryTimer_);
-    retryTimer_ = 0;
+    retryTimer_.cancel();
     refreshTimer_.cancel();
+    subTimer_.cancel();
     if (state_ == RegistrationState::Registered && sas_) {
         stopped_ = std::move(done);
         releaseReserved();
@@ -548,9 +583,9 @@ void ImsRegistration::stop(std::function<void()> done)
 
 void ImsRegistration::abort()
 {
-    loop_.cancel(retryTimer_);
-    retryTimer_ = 0;
+    retryTimer_.cancel();
     refreshTimer_.cancel();
+    subTimer_.cancel();
     if (!pendingBranch_.empty())
         endpoint_.forget(pendingBranch_);
     pendingBranch_.clear();
@@ -628,6 +663,19 @@ void ImsRegistration::subscribe()
         if (auto to = m->header("To"))
             if (auto n = NameAddr::parse(*to))
                 subToTag_ = n->params.get("tag").value_or("");
+        // 24.229 5.1.1.3: subscribed again 600 s before the end, or half
+        // way for a short one
+        unsigned expires = expires_;
+        if (auto e = m->header("Expires"))
+            if (auto v = number(*e))
+                expires = *v;
+        if (!expires)
+            return;
+        auto alive = alive_;
+        subTimer_.start(std::chrono::seconds(expires > 1200 ? expires - 600 : expires / 2), [this, alive]() {
+            if (*alive && state_ == RegistrationState::Registered)
+                subscribe();
+        });
     });
 }
 
@@ -636,23 +684,71 @@ bool ImsRegistration::handleRequest(const SipMessage &request, const Source &sou
     if (request.method() != "NOTIFY" || subCallId_.empty() || request.callId() != subCallId_)
         return false;
     endpoint_.respond(source, request, request.makeResponse(200, "OK"));
+    // The network ended the subscription: a new one, shortly
+    const std::string subState = request.header("Subscription-State").value_or("");
+    // RFC 6665 4.1.2.2 (and RFC 3265 before it): deactivated and timeout ask
+    // for a new subscription at once, probation and giveup later; any
+    // other reason (rejected, noresource, invariant) for none
+    const Params subParams = Params::parse(subState.substr(std::min(subState.size(), subState.find(';'))));
+    const std::string subReason = subParams.get("reason").value_or("");
+    std::optional<unsigned> subAgain;
+    if (subReason.empty() || iequals(subReason, "deactivated") || iequals(subReason, "timeout"))
+        subAgain = 1;
+    else if (iequals(subReason, "probation") || iequals(subReason, "giveup"))
+        subAgain = std::max(1u, number(subParams.get("retry-after").value_or("")).value_or(60));
+    if (iequals(trim(std::string_view(subState).substr(0, subState.find(';'))), "terminated") &&
+        state_ == RegistrationState::Registered && !subAgain)
+        log("reg event subscription ended by the network (" + subReason + ")");
+    if (iequals(trim(std::string_view(subState).substr(0, subState.find(';'))), "terminated") &&
+        state_ == RegistrationState::Registered && subAgain) {
+        auto alive = alive_;
+        subTimer_.start(std::chrono::seconds(*subAgain), [this, alive]() {
+            if (*alive && state_ == RegistrationState::Registered)
+                subscribe();
+        });
+    }
     // A registration of our IMPU that the network ended (24.229 5.1.1.6):
     // register again from the start
     const std::string &body = request.body;
     for (size_t pos = body.find("<registration"); pos != std::string::npos;
          pos = body.find("<registration", pos + 1)) {
         const std::string aor = xmlAttribute(body, pos, "aor");
+        // 24.229 5.1.1.5A: the network shortened our registration to have
+        // us authenticate again: register now
+        const size_t end = body.find("</registration>", pos);
+        const std::string element = body.substr(pos, end == std::string::npos ? end : end - pos);
+        if ((aor == params_.identity.impu() || aor == info_.defaultImpu) &&
+            element.find("event=\"shortened\"") != std::string::npos &&
+            state_ == RegistrationState::Registered && pendingBranch_.empty()) {
+            log("the network shortened the registration");
+            refresh();
+        }
         if ((aor == params_.identity.impu() || aor == info_.defaultImpu) &&
             xmlAttribute(body, pos, "state") == "terminated" &&
             state_ == RegistrationState::Registered) {
-            log("the network ended the registration");
+            // 24.229 5.1.1.7: deactivated asks for a new registration;
+            // rejected does not, and a network that keeps ending what it
+            // just gave is not asked every second either: those wait as
+            // failed attempts do
+            const bool rejected = element.find("event=\"rejected\"") != std::string::npos;
+            const auto now = std::chrono::steady_clock::now();
+            if (lastEnded_ && now - *lastEnded_ < std::chrono::seconds(2 * params_.profile.retryMax))
+                ended_++;
+            else
+                ended_ = 0;
+            lastEnded_ = now;
+            const auto delay = rejected || ended_ ? backoff(ended_ + 1) : std::chrono::seconds(1);
+            log(std::string("the network ended the registration") + (rejected ? " (rejected)" : ""));
             subCallId_.clear();
+            refreshTimer_.cancel();
+            subTimer_.cancel();
             endpoint_.closeProtected();
             clearSecurity();
             failures_ = 0;
-            setState(RegistrationState::Registering, "ended by the network");
+            setState(RegistrationState::Registering,
+                     "ended by the network; again in " + std::to_string(delay.count()) + " s");
             auto alive = alive_;
-            retryTimer_ = loop_.after(std::chrono::seconds(1), [this, alive]() {
+            retryTimer_.start(delay, [this, alive]() {
                 if (*alive)
                     begin();
             });

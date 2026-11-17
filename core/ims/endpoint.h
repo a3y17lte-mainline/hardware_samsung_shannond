@@ -113,7 +113,7 @@ private:
     void readUdp(int fd, Flow flow);
     void readTcp(int fd);
     void writeTcp(int fd);
-    void drop(int fd);
+    void drop(int fd, bool ours = false);
     void received(const std::string &text, const Source &source);
     void handleResponse(SipMessage response);
     void handleRequest(SipMessage request, const Source &source);

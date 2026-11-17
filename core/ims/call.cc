@@ -163,6 +163,7 @@ struct ImsCalls::Session {
     std::map<std::string, SipMessage> forkAcks;
     bool prackPending = false;
     EventLoop::TimerId ringbackTimer = 0;
+    EventLoop::TimerId setupTimer = 0;  // from the INVITE to the 180 (or the end)
 
     // An incoming INVITE
     std::optional<SipMessage> inviteIn;
@@ -236,7 +237,7 @@ ImsCalls::~ImsCalls()
     media_.onEvents({});
     loop_.cancel(handoverHold_);
     for (auto &[id, s] : sessions_)
-        for (auto t : {s->ringbackTimer, s->relTimer, s->ringTimer, s->okTimer, s->sessionTimer})
+        for (auto t : {s->ringbackTimer, s->setupTimer, s->relTimer, s->ringTimer, s->okTimer, s->sessionTimer})
             loop_.cancel(t);
 }
 
@@ -301,7 +302,7 @@ void ImsCalls::end(Session &s, int status, const std::string &reason, bool retry
     if (s.info.state == ImsCallState::Ended)
         return;
     const bool shown = s.info.state != ImsCallState::Setup;
-    for (auto *t : {&s.ringbackTimer, &s.relTimer, &s.ringTimer, &s.okTimer, &s.sessionTimer}) {
+    for (auto *t : {&s.ringbackTimer, &s.setupTimer, &s.relTimer, &s.ringTimer, &s.okTimer, &s.sessionTimer}) {
         loop_.cancel(*t);
         *t = 0;
     }
@@ -450,6 +451,8 @@ void ImsCalls::sendInDialog(Session &s, SipMessage m, SipEndpoint::ResponseHandl
 
 void ImsCalls::ack(Session &s, uint32_t cseq)
 {
+    if (!endpoint_)
+        return;  // detached: the registration and its sockets are going
     SipMessage a = SipMessage::request("ACK", s.remoteTarget);
     Via via;
     via.transport = "UDP";
@@ -501,8 +504,11 @@ std::string ImsCalls::targetUri(const std::string &number, const std::string &do
 
 // Outgoing calls
 
-std::optional<int> ImsCalls::dial(const std::string &number)
+std::optional<int> ImsCalls::dial(const std::string &dialled)
 {
+    // The 22.030 prefixes for one call: #31# hides our number, *31# shows it
+    const bool hide = dialled.starts_with("#31#");
+    const std::string number = hide || dialled.starts_with("*31#") ? dialled.substr(4) : dialled;
     if (!attached() || registration_->state() != RegistrationState::Registered || number.empty())
         return std::nullopt;
     const RegistrationInfo &reg = registration_->info();
@@ -545,6 +551,8 @@ std::optional<int> ImsCalls::dial(const std::string &number)
     m.add("Accept-Contact", std::string("*;") + kMmtelTag);
     m.add("P-Preferred-Service", kMmtelService);
     m.add("P-Preferred-Identity", "<" + reg.defaultImpu + ">");
+    if (hide)
+        m.add("Privacy", "id");  // 24.607 4.5.2.4: the network withholds our identity
     m.add("P-Early-Media", "supported");
     m.add("Supported", profile_.preconditions ? "100rel, precondition, timer" : "100rel, timer");
     m.add("Allow", kAllow);
@@ -571,6 +579,21 @@ void ImsCalls::sendInvite(Session &s, SipMessage invite)
     auto alive = alive_;
     s.inviteOpen = true;
     s.provisional = false;
+    // The transaction's own timer ends with the first 100: from there to
+    // the ringing (bearer, preconditions, the far end) this one watches
+    loop_.cancel(s.setupTimer);
+    s.setupTimer = loop_.after(std::chrono::seconds(profile_.setupTimer), [this, alive, id]() {
+        if (!*alive)
+            return;
+        Session *s = find(id);
+        if (!s || s->info.state != ImsCallState::Dialing)
+            return;
+        s->setupTimer = 0;
+        log("call " + std::to_string(id) + ": no progress in time");
+        const bool nothing = !s->provisional;
+        cancel(*s);
+        end(*s, 408, "No answer from the network", nothing);
+    });
     s.inviteBranch = endpoint_->send(std::move(invite), registration_->route(), [this, alive, id](const SipMessage *r) {
         if (*alive)
             inviteAnswered(id, r);
@@ -656,14 +679,21 @@ void ImsCalls::earlyDialog(Session &s, const SipMessage &r)
     if (tag.empty())
         return;
     const bool final = r.status() >= 200;
-    if (s.remoteTag.empty() || (final && tag != s.remoteTag)) {
-        // Forks: the first early dialog is ours; a 2xx from another fork
-        // takes over
+    if (s.remoteTag.empty() || tag != s.remoteTag) {
+        // Forks (RFC 3261 13.2.2.4): the newest early dialog is ours (a
+        // forwarded call's next leg), and so is the one whose 2xx comes.
+        // Its offer/answer and reliable answers start again.
+        if (!s.remoteTag.empty() && !final) {
+            s.lastRseq = 0;
+            s.prackPending = false;
+            s.remote.reset();
+            if (s.qosUpdateSent && s.local)
+                s.local->qos.localCurrent = false;
+            s.qosUpdateSent = false;
+        }
         s.remoteTag = tag;
         auto rr = r.headers("Record-Route");
         s.routeSet.assign(rr.rbegin(), rr.rend());
-    } else if (tag != s.remoteTag) {
-        return;
     }
     const std::string target = uriOf(r.header("Contact"));
     if (!target.empty())
@@ -751,8 +781,14 @@ void ImsCalls::inviteAnswered(int id, const SipMessage *r)
         return;
     }
     const int status = r->status();
-    if (status == 100)
+    if (status == 100) {
+        // RFC 3261 9.1: any provisional answer lets a waiting CANCEL go
+        if (s.cancelWanted) {
+            s.provisional = true;
+            cancel(s);
+        }
         return;
+    }
     if (status < 200) {
         s.provisional = true;
         if (s.cancelWanted) {
@@ -771,6 +807,8 @@ void ImsCalls::inviteAnswered(int id, const SipMessage *r)
                 remoteAnswer(s, *sdp);
         updateEarlyMedia(s, *r);
         if (status == 180 && s.info.state == ImsCallState::Dialing) {
+            loop_.cancel(s.setupTimer);
+            s.setupTimer = 0;
             setState(s, ImsCallState::Alerting);
             auto alive = alive_;
             s.ringbackTimer = loop_.after(std::chrono::seconds(profile_.ringbackTimer), [this, alive, id]() {
@@ -799,6 +837,8 @@ void ImsCalls::inviteAnswered(int id, const SipMessage *r)
         s.info.earlyMedia = false;
         loop_.cancel(s.ringbackTimer);
         s.ringbackTimer = 0;
+        loop_.cancel(s.setupTimer);
+        s.setupTimer = 0;
         if (auto sdp = sdpOf(*r))
             if (!s.remote || sdp->version != s.remote->version)
                 remoteAnswer(s, *sdp);
@@ -840,14 +880,16 @@ void ImsCalls::inviteAnswered(int id, const SipMessage *r)
         }
     }
     const auto &codes = profile_.csfbCodes;
-    const bool cs = std::find(codes.begin(), codes.end(), status) != codes.end();
+    // 380 Alternative Service (24.229 5.1.2A.1.1): the call belongs on CS,
+    // where the network knows its emergency numbers
+    const bool cs = status == 380 || std::find(codes.begin(), codes.end(), status) != codes.end();
     end(s, status, r->reason(), cs);
 }
 
 void ImsCalls::cancel(Session &s)
 {
     s.cancelWanted = false;
-    if (!s.inviteOpen)
+    if (!s.inviteOpen || !endpoint_)
         return;
     if (!s.provisional) {
         // RFC 3261 9.1: a CANCEL only after a provisional answer
@@ -1245,12 +1287,21 @@ void ImsCalls::offerReceived(Session &s, const SipMessage &request, const Source
             endpoint_->respond(source, request, request.makeResponse(488, "Not Acceptable Here"));
             return;
         }
+        // An answer to this offer (RFC 3264 6): its codec and payload types
+        MediaCapabilities caps = profile_.media;
+        caps.preconditions = s.preconditions;
+        auto made = makeAnswer(caps, *offer, endpoint_->localAddress(), s.port, s.sdpId);
+        if (!made) {
+            endpoint_->respond(source, request, request.makeResponse(488, "Not Acceptable Here"));
+            return;
+        }
         s.remote = *offer;
         s.remoteResources = resourcesMet(*offer);
-        Sdp answer = nextSdp(s);
-        // Our direction: what we want (held or not) and what the offer allows
+        Sdp answer = *made;
+        answer.version = ++s.sdpVersion;
+        // Our direction: what the offer allows; on hold we send only
         answer.direction =
-            makeDirection(!s.localHold && hasRecv(offer->direction), hasSend(offer->direction));
+            makeDirection(hasRecv(offer->direction), !s.localHold && hasSend(offer->direction));
         if (s.preconditions && offer->qos.present) {
             answer.qos.present = true;
             setPreconditions(answer, voiceBearer_ || s.confirmed, offer->qos.localCurrent);
@@ -1473,7 +1524,9 @@ MediaSetup ImsCalls::mediaSetup(const Session &s) const
     }
     m.ptime = remote.ptime ? remote.ptime : profile_.media.ptime;
     m.maxptime = remote.maxptime ? remote.maxptime : profile_.media.maxptime;
-    m.active = local.direction == Direction::SendRecv && remote.direction == Direction::SendRecv;
+    // The engine knows running or held: a stream we only receive (an
+    // announcement, music on hold) runs, so that it is heard
+    m.active = hasRecv(local.direction) && hasSend(remote.direction);
     return m;
 }
 
@@ -1518,14 +1571,27 @@ void ImsCalls::syncMedia(Session &s)
         media_.open(setup, [this, alive, id, finished](std::optional<int> channel) {
             if (!*alive)
                 return;
-            if (Session *s = find(id)) {
+            Session *s = find(id);
+            if (s)
                 s->channel = channel;
-                if (!channel)
-                    log("call " + std::to_string(id) + ": the voice engine refused the call's media");
-            } else if (channel) {
+            else if (channel)
                 media_.close(*channel, {});
-            }
+            if (s && !channel)
+                s->mediaDirty = false;
             finished();
+            s = find(id);
+            if (!s || channel || s->info.state == ImsCallState::Ended)
+                return;
+            // No voice, no call: an outgoing one still being set up can go
+            // to CS, any other ends
+            log("call " + std::to_string(id) + ": the voice engine refused the call's media");
+            if (!s->confirmed && !s->info.incoming) {
+                cancel(*s);
+                end(*s, 0, "No media", true);
+            } else {
+                sendBye(*s);
+                end(*s, 0, "No media");
+            }
         });
     } else {
         media_.update(*s.channel, setup, [finished](bool) { finished(); });

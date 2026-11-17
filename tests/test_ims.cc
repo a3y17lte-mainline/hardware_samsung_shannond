@@ -243,14 +243,15 @@ TEST(ims_refresh_with_new_keys)
     b.pcscf.challengeRefresh = true;
     b.reg.start(b.params());
     CHECK(b.waitFor(RegistrationState::Registered));
-    // As the stock stack: same ports, so the security associations stay;
-    // the SPIs offered with the refresh are given back
+    // 33.203 7.4: a new set from the SPIs offered with the refresh, on the
+    // same ports; the old one goes
     const SaSet first = b.net.installed.at(0);
     CHECK(b.loop.runUntil([&] { return b.pcscf.registered == 2; }, std::chrono::seconds(6)));
     CHECK(b.loop.runUntil([&] { return b.net.reserved.empty(); }));
     CHECK(b.reg.state() == RegistrationState::Registered);
-    CHECK(b.net.installed.size() == 1 && b.net.removed.empty());
-    CHECK(b.net.installed[0].spiUc == first.spiUc && b.pcscf.ueServer.port == first.portUs);
+    CHECK(b.net.installed.size() == 1 && b.net.removed.size() == 1 && b.net.removed[0].spiUc == first.spiUc);
+    CHECK(b.net.installed[0].spiUc != first.spiUc && b.net.installed[0].portUs == first.portUs &&
+          b.pcscf.ueServer.port == first.portUs);
     CHECK(b.pcscf.challenges == 2);
 }
 
@@ -310,6 +311,7 @@ TEST(ims_brings_up_pdn_registers_and_tells_the_modem)
     o.profile->localPort = 0;
     o.profile->portBase = 45000;
     o.profile->timers.t1 = std::chrono::milliseconds(10);
+    o.lossGrace = std::chrono::milliseconds(50);
     o.pdnRetry = std::chrono::seconds(1);
     sim::FakeImsNetwork *net = nullptr;
     Ims ims(modem, sim, network, data,
@@ -438,6 +440,7 @@ TEST(ims_srvcc)
     o.profile->localPort = 0;
     o.profile->portBase = 45000;
     o.profile->timers.t1 = std::chrono::milliseconds(10);
+    o.lossGrace = std::chrono::milliseconds(50);
     Ims ims(modem, sim, network, data,
             [](const DataCall &) { return std::make_unique<sim::FakeImsNetwork>("127.0.0.1"); }, o);
     std::vector<SrvccState> states;
@@ -503,6 +506,7 @@ TEST(ims_registers_on_a_card_without_isim)
     o.profile->localPort = 0;
     o.profile->portBase = 45000;
     o.profile->timers.t1 = std::chrono::milliseconds(10);
+    o.lossGrace = std::chrono::milliseconds(50);
     Ims ims(modem, sim, network, data,
             [](const DataCall &) { return std::make_unique<sim::FakeImsNetwork>("127.0.0.1"); }, o);
     fake.boot();

@@ -34,7 +34,7 @@ Ims::Ims(Modem &modem, Sim &sim, Network &network, Data &data, NetworkFactory fa
 
 Ims::Ims(Modem &modem, Sim &sim, Network &network, Data &data, NetworkFactory factory, Options options)
     : modem_(modem), loop_(modem.loop()), sim_(sim), network_(network), data_(data), factory_(std::move(factory)),
-      options_(std::move(options))
+      options_(std::move(options)), retry_(loop_)
 {
     voice_ = std::make_unique<VoiceEngine>(modem_);
     calls_ = std::make_unique<ImsCalls>(loop_, *voice_);
@@ -123,6 +123,13 @@ void Ims::srvcc(const Message &message)
     switch (d->state) {
     case IPC_CALL_SRVCC_STARTED:
         state = SrvccState::Started;
+        loop_.cancel(srvccTimer_);
+        srvccTimer_ = loop_.after(std::chrono::seconds(30), [this, alive = alive_]() {
+            if (!*alive)
+                return;
+            srvccTimer_ = 0;
+            evaluate();
+        });
         log("SRVCC started: " + std::to_string(calls.size()) + " call(s) to the modem");
         modem_.request(IPC_CALL_LIST, IPC_TYPE_SET, srvccCallList(calls), [this](const Result &r) {
             if (!r.ok)
@@ -143,12 +150,19 @@ void Ims::srvcc(const Message &message)
     }
     for (auto &c : srvcc_)
         c(state);
+    if (state != SrvccState::Started) {
+        loop_.cancel(srvccTimer_);
+        srvccTimer_ = 0;
+        evaluate();
+    }
 }
 
 Ims::~Ims()
 {
     *alive_ = false;
     loop_.cancel(timer_);
+    loop_.cancel(srvccTimer_);
+    loop_.cancel(lossTimer_);
     calls_.reset();
     voice_.reset();
     registration_.reset();
@@ -188,10 +202,8 @@ void Ims::setEnabled(bool enabled)
     enabled_ = enabled;
     log(enabled ? "VoLTE on" : "VoLTE off");
     // Switched on by hand: no wait for the retry after an earlier stop
-    if (enabled && phase_ == Phase::Off && timer_) {
-        loop_.cancel(timer_);
-        timer_ = 0;
-    }
+    if (enabled && phase_ == Phase::Off)
+        retry_.cancel();
     evaluate();
 }
 
@@ -199,7 +211,8 @@ std::optional<ImsProfile> Ims::currentProfile() const
 {
     if (options_.profile)
         return options_.profile;
-    if (const ImsProfile *p = profileFor(network_.operatorCode()))
+    // The SIM's operator decides, not the network the phone is on
+    if (const ImsProfile *p = profileForImsi(sim_.imsi()))
         return *p;
     return std::nullopt;
 }
@@ -218,7 +231,9 @@ bool Ims::wanted(std::string &why) const
     else if (!options_.ignoreVops && data.volte != true)
         why = "the cell offers no voice over PS";
     else if (!currentProfile())
-        why = "no IMS profile for " + network_.operatorCode();
+        why = "no IMS profile for this SIM";
+    else if (data.state == RegState::Roaming && !currentProfile()->roaming)
+        why = "roaming";
     else
         return true;
     return false;
@@ -228,6 +243,30 @@ void Ims::evaluate()
 {
     std::string why;
     const bool want = wanted(why);
+    // During SRVCC the phone leaves LTE before the modem reports the end:
+    // the calls are the handover's to end, not ours
+    if (!want && srvccTimer_ && enabled_)
+        return;
+    if (want) {
+        loop_.cancel(lossTimer_);
+        lossTimer_ = 0;
+    }
+    // The network side dropped out while IMS runs: wait a moment before
+    // ending calls and deregistering. The switch and the SIM act at once.
+    if (!want && enabled_ && sim_.state() == SimState::Ready && !sim_.imsi().empty() &&
+        phase_ != Phase::Off && phase_ != Phase::Stopping && !lossExpired_ &&
+        options_.lossGrace.count() > 0) {
+        if (!lossTimer_)
+            lossTimer_ = loop_.after(options_.lossGrace, [this, alive = alive_]() {
+                if (!*alive)
+                    return;
+                lossTimer_ = 0;
+                lossExpired_ = true;
+                evaluate();
+                lossExpired_ = false;
+            });
+        return;
+    }
     if (!want) {
         if (phase_ != Phase::Off && phase_ != Phase::Stopping) {
             log("stopping: " + why);
@@ -239,7 +278,7 @@ void Ims::evaluate()
         }
         return;
     }
-    if (phase_ != Phase::Off || timer_)
+    if (phase_ != Phase::Off || timer_ || retry_.active())
         return;
     profile_ = currentProfile();
     if (options_.ownPdn) {
@@ -279,11 +318,9 @@ void Ims::connectPdn(const ImsProfile &profile)
             why_ = "IMS PDN failed (cause " + std::to_string(data_.lastFailCause(cid)) + "), again in " +
                    std::to_string(options_.pdnRetry.count()) + " s";
             log(why_);
-            timer_ = loop_.after(options_.pdnRetry, [this, alive]() {
-                if (!*alive)
-                    return;
-                timer_ = 0;
-                evaluate();
+            retry_.start(options_.pdnRetry, [this, alive]() {
+                if (*alive)
+                    evaluate();
             });
             notify();
             return;
@@ -308,6 +345,12 @@ void Ims::pdnUp(const DataCall &call)
             activity_();
     });
     endpoint_->onRequest([this](const SipMessage &request, const Source &source) {
+        // 24.229 5.1.1.5.1: with security associations up, a request that
+        // did not come through them is not the P-CSCF's
+        if (source.flow == Flow::Plain && endpoint_->isProtected()) {
+            log("unprotected " + request.method() + " dropped");
+            return;
+        }
         if (registration_ && registration_->handleRequest(request, source))
             return;
         if (calls_->handleRequest(request, source))
@@ -443,6 +486,9 @@ void Ims::stop(bool deregister)
 {
     loop_.cancel(timer_);
     timer_ = 0;
+    loop_.cancel(lossTimer_);
+    lossTimer_ = 0;
+    retry_.cancel();
     const bool wasPdn = phase_ == Phase::Pdn;
     phase_ = Phase::Stopping;
     // Calls end first: their BYEs and CANCELs go out while we still can
@@ -487,11 +533,9 @@ void Ims::finishStop()
     notify();
     // Conditions may hold again (or still): look once more, later
     auto alive = alive_;
-    timer_ = loop_.after(options_.pdnRetry, [this, alive]() {
-        if (!*alive)
-            return;
-        timer_ = 0;
-        evaluate();
+    retry_.start(options_.pdnRetry, [this, alive]() {
+        if (*alive)
+            evaluate();
     });
 }
 
