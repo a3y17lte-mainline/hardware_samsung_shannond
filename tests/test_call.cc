@@ -422,6 +422,154 @@ TEST(call_outgoing_cancelled)
     CHECK(b.call(*id)->state == ImsCallState::Ended && !b.call(*id)->retryOnCs);
 }
 
+TEST(call_early_media_as_stock_decides_it)
+{
+    // The answer's SDP direction without P-Early-Media, the header when it
+    // is there; no RTP during early media: the phone's own ringback
+    Bench b;
+    CHECK(b.start());
+    std::optional<SipMessage> invite;
+    Reply reply;
+    b.script = [&](const SipMessage &m, const Reply &r) {
+        if (m.method() == "INVITE") {
+            invite = m;
+            reply = r;
+            SipMessage p = response(m, 183, "Session Progress");
+            p.add("Contact", kFarContact);
+            withSdp(p, farAnswer(m.body, true));
+            r(p);
+        }
+    };
+    auto id = b.calls.dial("+420603123456");
+    CHECK(b.waitFor([&] { return b.call(*id) && b.call(*id)->earlyMedia; }));
+    auto ringing = [&](const char *pem) {
+        SipMessage p = response(*invite, 180, "Ringing");
+        p.add("Contact", kFarContact);
+        if (pem)
+            p.add("P-Early-Media", pem);
+        reply(p);
+    };
+    ringing("inactive");
+    CHECK(b.waitFor([&] { return b.call(*id)->state == ImsCallState::Alerting && !b.call(*id)->earlyMedia; }));
+    ringing("gated");  // changes nothing
+    ringing("sendrecv");
+    CHECK(b.waitFor([&] { return b.call(*id)->earlyMedia; }));
+    CHECK(b.waitFor([&] { return !b.media.channels.empty(); }));
+    b.media.rtpTimeout(b.media.channels.begin()->first);
+    CHECK(b.waitFor([&] { return !b.call(*id)->earlyMedia; }));
+    CHECK(b.call(*id)->state == ImsCallState::Alerting);  // the call goes on
+    SipMessage ok = response(*invite, 200, "OK");
+    ok.add("Contact", kFarContact);
+    reply(ok);
+    CHECK(b.waitFor([&] { return b.call(*id)->state == ImsCallState::Active && !b.call(*id)->earlyMedia; }));
+}
+
+TEST(call_session_interval_too_small_is_retried)
+{
+    // RFC 4028 7.4: once more with the network's Min-SE, then no more
+    Bench b;
+    CHECK(b.start());
+    std::vector<SipMessage> invites;
+    b.script = [&](const SipMessage &m, const Reply &reply) {
+        if (m.method() != "INVITE")
+            return;
+        invites.push_back(m);
+        SipMessage r = response(m, 422, "Session Interval Too Small");
+        r.add("Min-SE", "5400");
+        reply(r);
+    };
+    auto id = b.calls.dial("+420603123456");
+    CHECK(b.waitFor([&] { return b.call(*id) && b.call(*id)->state == ImsCallState::Ended; }));
+    CHECK(invites.size() == 2 && b.call(*id)->endStatus == 422);
+    CHECK(invites[1].header("Session-Expires") == "5400" && invites[1].header("Min-SE") == "5400");
+    CHECK(invites[1].header("CSeq") == "2 INVITE" && invites[1].callId() == invites[0].callId());
+    CHECK(invites[1].header("From") == invites[0].header("From") && invites[1].branch() != invites[0].branch());
+    CHECK(b.waitFor([&] { return b.count("ACK") == 2; }));  // each 422, by the transactions
+}
+
+TEST(call_second_fork_answer_is_ended)
+{
+    // RFC 3261 13.2.2.4: the first 2xx makes the call; a 2xx of another
+    // fork is ACKed and ended with a BYE, also when it comes again
+    Bench b;
+    CHECK(b.start());
+    b.script = [&](const SipMessage &m, const Reply &reply) {
+        if (m.method() != "INVITE")
+            return;
+        for (const char *tag : {"far1", "far2", "far2"}) {
+            SipMessage ok = response(m, 200, "OK", tag);
+            ok.add("Contact", tag == std::string("far1") ? kFarContact : "<sip:fork2@127.0.0.2>");
+            withSdp(ok, farAnswer(m.body, true));
+            reply(ok);
+        }
+    };
+    auto id = b.calls.dial("+420603123456");
+    CHECK(b.waitFor([&] { return b.call(*id) && b.call(*id)->state == ImsCallState::Active; }));
+    CHECK(b.waitFor([&] { return b.count("ACK") == 3 && b.count("BYE") == 1; }));
+    const SipMessage *bye = b.last("BYE");
+    CHECK(bye->header("To")->find("tag=far2") != std::string::npos);
+    CHECK(bye->requestUri() == "sip:fork2@127.0.0.2");
+    size_t far2Acks = 0;
+    for (const auto &m : b.got)
+        if (m.isRequest() && m.method() == "ACK" && m.header("To")->find("tag=far2") != std::string::npos)
+            far2Acks++;
+    CHECK(far2Acks == 2);
+    CHECK(b.call(*id)->state == ImsCallState::Active);
+}
+
+TEST(call_incoming_without_offer)
+{
+    // Our offer in the 200, the answer in the ACK; an ACK without one ends it
+    Bench b;
+    CHECK(b.start());
+    std::string toTag, ourOffer;
+    b.script = [&](const SipMessage &m, const Reply &) {
+        if (!m.isRequest() && m.status() == 200 && m.cseq()->second == "INVITE") {
+            toTag = m.header("To").value_or("");
+            ourOffer = m.body;
+        }
+    };
+    auto invite = SipMessage::request("INVITE", "sip:ue@127.0.0.1");
+    invite.add("Via", b.pcscf.via());
+    invite.add("From", "<tel:+420777123456>;tag=caller9");
+    invite.add("To", "<sip:+420600000001@ims.mnc002.mcc230.3gppnetwork.org>");
+    invite.add("Call-ID", "mt-offerless-1");
+    invite.add("CSeq", "1 INVITE");
+    invite.add("Contact", kFarContact);
+    b.pcscf.sendToUe(invite);
+    CHECK(b.waitFor([&] { return b.count("INVITE", 180) == 1 && b.calls.calls().size() == 1; }));
+    int id = b.calls.calls()[0].id;
+    CHECK(b.calls.answer(id));
+    CHECK(b.waitFor([&] { return !toTag.empty(); }));
+    CHECK(ourOffer.find("m=audio") != std::string::npos && b.media.opened == 0);
+    auto ack = [&](const std::string &callId, const std::string &to, const std::string &body) {
+        SipMessage a = SipMessage::request("ACK", "sip:ue@127.0.0.1");
+        a.add("Via", b.pcscf.via());
+        a.add("From", invite.header("From").value_or(""));
+        a.add("To", to);
+        a.add("Call-ID", callId);
+        a.add("CSeq", "1 ACK");
+        if (!body.empty())
+            withSdp(a, body);
+        b.pcscf.sendToUe(a);
+    };
+    ack("mt-offerless-1", toTag, farAnswer(ourOffer, true));
+    CHECK(b.waitFor([&] { return b.media.opened == 1; }));
+    CHECK(b.call(id)->state == ImsCallState::Active);
+
+    // The same without an answer in the ACK
+    toTag.clear();
+    invite.set("Call-ID", "mt-offerless-2");
+    invite.set("Via", b.pcscf.via());
+    b.pcscf.sendToUe(invite);
+    CHECK(b.waitFor([&] { return b.calls.calls().size() == 2; }));
+    int id2 = b.calls.calls()[1].id;
+    CHECK(b.calls.answer(id2));
+    CHECK(b.waitFor([&] { return !toTag.empty(); }));
+    ack("mt-offerless-2", toTag, "");
+    CHECK(b.waitFor([&] { return b.call(id2) && b.call(id2)->state == ImsCallState::Ended && b.count("BYE") == 1; }));
+}
+
 TEST(call_srvcc_handover)
 {
     // SRVCC completed: the call ends here without a BYE (it goes on as a

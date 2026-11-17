@@ -156,6 +156,11 @@ struct ImsCalls::Session {
     bool provisional = false;
     bool cancelWanted = false;
     uint32_t lastRseq = 0;
+    std::optional<SipMessage> inviteOut;  // as first built, for a retry after 422
+    bool retried422 = false;
+    // 2xx answers of other forks (RFC 3261 13.2.2.4): their ACK, sent
+    // again for their retransmissions; the dialog is ended with a BYE
+    std::map<std::string, SipMessage> forkAcks;
     bool prackPending = false;
     EventLoop::TimerId ringbackTimer = 0;
 
@@ -176,6 +181,7 @@ struct ImsCalls::Session {
     std::chrono::milliseconds okInterval{0}, okElapsed{0};
     EventLoop::TimerId okTimer = 0;
     bool answerInAck = false;  // our 2xx made the offer
+    bool offerless = false;    // an incoming INVITE without an offer: ours is in the 200
 
     // SDP
     uint64_t sdpId = 0, sdpVersion = 0;
@@ -204,6 +210,14 @@ ImsCalls::ImsCalls(EventLoop &loop, MediaEngine &media) : loop_(loop), media_(me
     events.timeout = [this](int channel) {
         // As stock (CallSession::OnRtpRtcpTimeout): only an active call that
         // expects to receive ends; early media and held calls go on
+        for (auto &[id, s] : sessions_)
+            if (s->channel == channel && s->info.earlyMedia && !s->confirmed) {
+                // Stock: "RTP timeout during early media: start local ringback tone"
+                log("call " + std::to_string(id) + ": no early media arrives, local ringback");
+                s->info.earlyMedia = false;
+                notify(*s);
+                return;
+            }
         for (auto &[id, s] : sessions_)
             if (s->channel == channel && s->info.state == ImsCallState::Active && s->local && s->remote &&
                 hasRecv(s->local->direction) && hasSend(s->remote->direction)) {
@@ -546,13 +560,94 @@ std::optional<int> ImsCalls::dial(const std::string &number)
     sessions_[id] = std::move(owned);
     log("call " + std::to_string(id) + ": dialing");
     notify(s);
+    s.inviteOut = m;
+    sendInvite(s, std::move(m));
+    return id;
+}
+
+void ImsCalls::sendInvite(Session &s, SipMessage invite)
+{
+    const int id = s.info.id;
     auto alive = alive_;
     s.inviteOpen = true;
-    s.inviteBranch = endpoint_->send(std::move(m), registration_->route(), [this, alive, id](const SipMessage *r) {
+    s.provisional = false;
+    s.inviteBranch = endpoint_->send(std::move(invite), registration_->route(), [this, alive, id](const SipMessage *r) {
         if (*alive)
             inviteAnswered(id, r);
     });
-    return id;
+}
+
+// Early media as the stock IMS stack decides it (CallUacSession::IsEarlyMedia):
+// the P-Early-Media header if there is one (RFC 5009: sendrecv, sendonly and
+// recvonly authorise it, inactive does not; gated and supported change
+// nothing), else the audio direction of the answer's SDP
+void ImsCalls::updateEarlyMedia(Session &s, const SipMessage &r)
+{
+    std::optional<bool> early;
+    if (auto pem = r.header("P-Early-Media")) {
+        std::string v = *pem;
+        for (char &c : v)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        if (v.find("sendrecv") != std::string::npos || v.find("sendonly") != std::string::npos ||
+            v.find("recvonly") != std::string::npos)
+            early = true;
+        else if (v.find("inactive") != std::string::npos)
+            early = false;
+    } else if (auto sdp = sdpOf(r)) {
+        early = sdp->direction != Direction::Inactive;
+    } else if (s.remote) {
+        early = s.remote->direction != Direction::Inactive;
+    }
+    if (!early || *early == s.info.earlyMedia)
+        return;
+    s.info.earlyMedia = *early;
+    log("call " + std::to_string(s.info.id) + ": early media " + (*early ? "from the network" : "off"));
+    notify(s);
+}
+
+// A 2xx from a fork other than the dialog we took (RFC 3261 13.2.2.4):
+// confirmed with an ACK, then ended with a BYE
+void ImsCalls::forkAnswered(Session &s, const SipMessage &r)
+{
+    const std::string tag = tagOf(r.header("To"));
+    auto cseq = r.cseq();
+    if (tag.empty() || !cseq)
+        return;
+    auto known = s.forkAcks.find(tag);
+    if (known != s.forkAcks.end()) {
+        endpoint_->sendStateless(known->second, registration_->route());  // a retransmission
+        return;
+    }
+    const std::string target = uriOf(r.header("Contact"));
+    if (target.empty())
+        return;
+    auto rr = r.headers("Record-Route");
+    const std::vector<std::string> routes(rr.rbegin(), rr.rend());
+    auto request = [&](const std::string &method, uint32_t number) {
+        SipMessage m = SipMessage::request(method, target);
+        for (const auto &route : routes)
+            m.add("Route", route);
+        m.add("Max-Forwards", "70");
+        m.add("From", s.localUri + ";tag=" + s.localTag);
+        m.add("To", s.remoteUri + ";tag=" + tag);
+        m.add("Call-ID", s.callId);
+        m.add("CSeq", std::to_string(number) + " " + method);
+        return m;
+    };
+    SipMessage ack = request("ACK", cseq->first);
+    Via via;
+    via.transport = "UDP";
+    via.host = endpoint_->localAddress();
+    via.port = endpoint_->port(registration_->route().flow);
+    via.params.set("branch", newBranch());
+    via.params.set("rport");
+    ack.add("Via", via.str());
+    endpoint_->sendStateless(ack, registration_->route());
+    s.forkAcks.emplace(tag, ack);
+    log("call " + std::to_string(s.info.id) + ": a second fork answered, ending it");
+    SipMessage bye = request("BYE", cseq->first + 1);
+    registration_->decorate(bye, false);
+    endpoint_->send(std::move(bye), registration_->route(), [](const SipMessage *) {});
 }
 
 void ImsCalls::earlyDialog(Session &s, const SipMessage &r)
@@ -674,6 +769,7 @@ void ImsCalls::inviteAnswered(int id, const SipMessage *r)
         if (auto sdp = sdpOf(*r))
             if (!s.remote)
                 remoteAnswer(s, *sdp);
+        updateEarlyMedia(s, *r);
         if (status == 180 && s.info.state == ImsCallState::Dialing) {
             setState(s, ImsCallState::Alerting);
             auto alive = alive_;
@@ -700,6 +796,7 @@ void ImsCalls::inviteAnswered(int id, const SipMessage *r)
             return;
         }
         s.confirmed = true;
+        s.info.earlyMedia = false;
         loop_.cancel(s.ringbackTimer);
         s.ringbackTimer = 0;
         if (auto sdp = sdpOf(*r))
@@ -718,6 +815,30 @@ void ImsCalls::inviteAnswered(int id, const SipMessage *r)
     }
     if (ended)
         return;  // 487 after our CANCEL
+    if (status == 422 && !s.retried422 && s.inviteOut) {
+        // RFC 4028 7.4: the session interval was too small: once more with
+        // the network's Min-SE (a new transaction, CSeq up, same dialog ids)
+        unsigned minSe = 0;
+        try {
+            minSe = static_cast<unsigned>(std::stoul(r->header("Min-SE").value_or("0")));
+        } catch (...) {
+        }
+        if (minSe) {
+            s.retried422 = true;
+            const unsigned interval = std::max(minSe, profile_.sessionExpires);
+            SipMessage m = *s.inviteOut;
+            s.inviteCseq = ++s.localCseq;
+            m.set("CSeq", std::to_string(s.inviteCseq) + " INVITE");
+            m.set("Session-Expires", std::to_string(interval));
+            m.set("Min-SE", std::to_string(minSe));
+            s.remoteTag.clear();
+            s.routeSet.clear();
+            s.lastRseq = 0;
+            log("call " + std::to_string(id) + ": 422, again with a session interval of " + std::to_string(interval));
+            sendInvite(s, std::move(m));
+            return;
+        }
+    }
     const auto &codes = profile_.csfbCodes;
     const bool cs = std::find(codes.begin(), codes.end(), status) != codes.end();
     end(s, status, r->reason(), cs);
@@ -742,8 +863,10 @@ void ImsCalls::incoming(const SipMessage &request, const Source &source)
 {
     endpoint_->respond(source, request, request.makeResponse(100, "Trying"));
     auto offer = sdpOf(request);
-    if (!offer || !offer->voice() || offer->port == 0) {
-        // No offer (or none we can take): offerless INVITEs are not done
+    // Without an offer ours goes in the 200 and the answer comes in the ACK
+    // (RFC 3261 13.2.1); one we cannot take is refused
+    const bool offerless = !offer && request.body.empty();
+    if (!offerless && (!offer || !offer->voice() || offer->port == 0)) {
         log("incoming call without a usable SDP offer, rejected");
         endpoint_->respond(source, request, request.makeResponse(488, "Not Acceptable Here"));
         return;
@@ -782,6 +905,24 @@ void ImsCalls::incoming(const SipMessage &request, const Source &source)
     s.port = port;
     s.sdpId = s.sdpVersion = sdpSessionId();
 
+    if (offerless) {
+        if (s.remoteTarget.empty()) {
+            media_.releasePort(port);
+            endpoint_->respond(source, request, request.makeResponse(400, "Bad Request"));
+            return;
+        }
+        // No preconditions without an offer to negotiate them in: ringing
+        // at once, our offer in the 200
+        MediaCapabilities caps = profile_.media;
+        caps.preconditions = false;
+        s.local = makeOffer(caps, endpoint_->localAddress(), port, s.sdpId);
+        s.offerless = true;
+        const int id = s.info.id;
+        sessions_[id] = std::move(owned);
+        log("call " + std::to_string(id) + ": incoming without an offer");
+        checkIncomingReady(*sessions_[id]);
+        return;
+    }
     MediaCapabilities caps = profile_.media;
     caps.preconditions = profile_.preconditions;
     auto answer = makeAnswer(caps, *offer, endpoint_->localAddress(), port, s.sdpId);
@@ -968,6 +1109,8 @@ bool ImsCalls::answer(int id)
     if (!s->answerSentReliably && s->local)
         s->local->qos.present = false;
     respondInvite(*s, 200, "OK", false, !s->answerSentReliably);
+    if (s->offerless)
+        s->answerInAck = true;
     s->confirmed = true;
     if (s->sessionInterval) {
         SipMessage fake = SipMessage::response(200, "OK");
@@ -1015,8 +1158,13 @@ bool ImsCalls::handleRequest(const SipMessage &request, const Source &source)
                 s->okTimer = 0;
                 if (s->answerInAck) {
                     s->answerInAck = false;
-                    if (auto sdp = sdpOf(request))
+                    if (auto sdp = sdpOf(request)) {
                         remoteAnswer(*s, *sdp);
+                    } else if (s->offerless && !s->remote) {
+                        log("call " + std::to_string(s->info.id) + ": no answer to our offer, ending it");
+                        sendBye(*s);
+                        end(*s, 0, "No media");
+                    }
                 }
             }
         }
@@ -1151,7 +1299,14 @@ void ImsCalls::offerReceived(Session &s, const SipMessage &request, const Source
 void ImsCalls::handleStrayResponse(const SipMessage &response)
 {
     Session *s = byCallId(response.callId().value_or(""));
-    if (!s || !s->lastAck || !endpoint_)
+    if (!s || !endpoint_)
+        return;
+    const std::string tag = tagOf(response.header("To"));
+    if (!tag.empty() && tag != s->remoteTag) {
+        forkAnswered(*s, response);
+        return;
+    }
+    if (!s->lastAck)
         return;
     auto cseq = response.cseq(), acked = s->lastAck->cseq();
     if (cseq && acked && cseq->first == acked->first)
@@ -1303,7 +1458,7 @@ MediaSetup ImsCalls::mediaSetup(const Session &s) const
     m.remotePort = remote.port;
     m.remoteRtcpPort = remote.rtcpPort.value_or(0);
     // The codec chosen is the answer's first voice codec
-    const Sdp &answer = s.info.incoming ? local : remote;
+    const Sdp &answer = s.info.incoming && !s.offerless ? local : remote;
     const Codec *chosen = answer.voice();
     if (chosen) {
         const Codec *theirs = matching(remote, *chosen);

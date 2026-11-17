@@ -54,6 +54,9 @@ struct ImsCallInfo {
     bool retryOnCs = false;
     // Ended here by SRVCC: the call goes on as a CS call in the modem
     bool handedOver = false;
+    // Outgoing, before the answer: the network plays the ringback (early
+    // media), so the phone plays none of its own
+    bool earlyMedia = false;
 };
 
 class ImsCalls {
@@ -127,6 +130,9 @@ private:
     void prack(Session &s, const SipMessage &response);
     void sendQosUpdate(Session &s);
     void cancel(Session &s);
+    void sendInvite(Session &s, SipMessage invite);
+    void updateEarlyMedia(Session &s, const SipMessage &response);
+    void forkAnswered(Session &s, const SipMessage &response);
 
     // Incoming
     void incoming(const SipMessage &request, const Source &source);
