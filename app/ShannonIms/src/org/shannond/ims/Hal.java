@@ -27,6 +27,8 @@ final class Hal {
 
     interface Listener {
         void onConnected();
+        /** The HAL died: its registration and calls are gone */
+        default void onDisconnected() {}
         void onRegistrationChanged(Registration registration);
         void onCallChanged(Call call);
     }
@@ -65,6 +67,7 @@ final class Hal {
     private final IBinder.DeathRecipient mDeath = () -> mHandler.post(() -> {
         Log.w(TAG, "radio HAL gone, waiting for it");
         mHal = null;
+        for (Listener l : new ArrayList<>(mListeners)) l.onDisconnected();
         connect();
     });
 
@@ -121,6 +124,16 @@ final class Hal {
         }
     }
 
+    /** The HAL's calls that have not ended; empty while it is not there */
+    Call[] calls() {
+        if (mHal == null) return new Call[0];
+        try {
+            Call[] calls = mHal.getCalls();
+            return calls != null ? calls : new Call[0];
+        } catch (RemoteException | RuntimeException e) {
+            return new Call[0];
+        }
+    }
     Registration registration() {
         if (mHal == null) return null;
         try {

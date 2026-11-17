@@ -30,6 +30,8 @@ final class ShannonCallSession extends ImsCallSessionImplBase {
     private boolean mRemoteHeld;
     private boolean mLocalEnd;
     private boolean mEarlyMedia;
+    // A hold or resume the HAL took and has not answered: 1 hold, 2 resume
+    private int mPendingHold;
 
     /** call: the HAL's incoming call, null for an outgoing one */
     ShannonCallSession(ShannonMmTelFeature feature, Hal hal, ImsCallProfile profile, Call call) {
@@ -96,7 +98,12 @@ final class ShannonCallSession extends ImsCallSessionImplBase {
         IShannonIms hal = mHal.hal();
         try {
             if (hal == null) throw new IllegalStateException("no radio HAL");
-            mId = hal.dial(callee);
+            // Number withheld for this call (CLIR): the dial prefix the HAL reads
+            ImsCallProfile p = profile != null ? profile : mProfile;
+            boolean hide = p.getCallExtraInt(ImsCallProfile.EXTRA_OIR,
+                    ImsCallProfile.OIR_PRESENTATION_NOT_RESTRICTED)
+                    == ImsCallProfile.OIR_PRESENTATION_RESTRICTED;
+            mId = hal.dial(hide ? "#31#" + callee : callee);
             mState = State.INITIATED;
             mFeature.track(mId, this);
             if (mListener != null) mListener.callSessionInitiating(mProfile);
@@ -149,13 +156,17 @@ final class ShannonCallSession extends ImsCallSessionImplBase {
 
     @Override
     public void hold(ImsStreamMediaProfile profile) {
-        if (!request("hold", hal -> hal.hold(mId)) && mListener != null)
+        if (request("hold", hal -> hal.hold(mId)))
+            mPendingHold = 1;
+        else if (mListener != null)
             mListener.callSessionHoldFailed(new ImsReasonInfo(ImsReasonInfo.CODE_UNSPECIFIED, 0));
     }
 
     @Override
     public void resume(ImsStreamMediaProfile profile) {
-        if (!request("resume", hal -> hal.resume(mId)) && mListener != null)
+        if (request("resume", hal -> hal.resume(mId)))
+            mPendingHold = 2;
+        else if (mListener != null)
             mListener.callSessionResumeFailed(new ImsReasonInfo(ImsReasonInfo.CODE_UNSPECIFIED, 0));
     }
 
@@ -181,11 +192,33 @@ final class ShannonCallSession extends ImsCallSessionImplBase {
         // audio HAL, which mutes the modem
     }
 
+    /** The HAL died with the call */
+    void lost() {
+        if (mState == State.TERMINATED) return;
+        mState = State.TERMINATED;
+        if (mListener != null)
+            mListener.callSessionTerminated(new ImsReasonInfo(ImsReasonInfo.CODE_UNSPECIFIED, 0,
+                    "radio HAL gone"));
+    }
     /** A change of the HAL's call (main thread) */
     void onCallChanged(Call call) {
         final int previous = mCallState;
         mCallState = call.state;
         ImsCallSessionListener l = mListener;
+        // The HAL reports a failed hold or resume as the call unchanged
+        if (mPendingHold != 0 && call.state == previous
+                && (call.state == CallState.ACTIVE || call.state == CallState.HELD)
+                && call.remoteHeld == mRemoteHeld) {
+            final boolean hold = mPendingHold == 1;
+            mPendingHold = 0;
+            if (hold == (call.state == CallState.ACTIVE) && l != null) {
+                ImsReasonInfo why = new ImsReasonInfo(ImsReasonInfo.CODE_UNSPECIFIED, 0);
+                if (hold) l.callSessionHoldFailed(why);
+                else l.callSessionResumeFailed(why);
+            }
+        } else if (call.state != previous) {
+            mPendingHold = 0;
+        }
         switch (call.state) {
             case CallState.DIALING:
             case CallState.ALERTING: {

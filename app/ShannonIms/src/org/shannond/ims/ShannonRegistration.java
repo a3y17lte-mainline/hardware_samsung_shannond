@@ -51,6 +51,12 @@ final class ShannonRegistration extends ImsRegistrationImplBase implements Hal.L
     }
 
     @Override
+    public void onDisconnected() {
+        if (mState == -1 || mState == RegistrationState.IDLE) return;
+        mState = RegistrationState.IDLE;
+        onDeregistered(new ImsReasonInfo(ImsReasonInfo.CODE_LOCAL_NOT_REGISTERED, 0, "radio HAL gone"));
+    }
+    @Override
     public void onCallChanged(Call call) {
     }
 }

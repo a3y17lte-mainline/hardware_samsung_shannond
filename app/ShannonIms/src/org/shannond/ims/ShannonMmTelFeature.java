@@ -2,6 +2,7 @@
 package org.shannond.ims;
 
 import android.os.Bundle;
+import android.os.RemoteException;
 import android.telephony.TelephonyManager;
 import android.telephony.ims.ImsCallProfile;
 import android.telephony.ims.ImsCallSessionListener;
@@ -14,6 +15,7 @@ import android.util.SparseArray;
 
 import vendor.shannond.ims.Call;
 import vendor.shannond.ims.CallState;
+import vendor.shannond.ims.IShannonIms;
 import vendor.shannond.ims.Registration;
 
 /**
@@ -52,6 +54,29 @@ final class ShannonMmTelFeature extends MmTelFeature implements Hal.Listener {
         setFeatureState(STATE_READY);
         Registration r = mHal.registration();
         if (r != null) onRegistrationChanged(r);
+        // Calls the HAL has and we do not (this app restarted): a ringing
+        // one is announced; any other has no call in Telecom to belong to
+        IShannonIms hal = mHal.hal();
+        for (Call call : mHal.calls()) {
+            if (mSessions.get(call.id) != null) continue;
+            if (call.state == CallState.INCOMING && call.incoming) {
+                onCallChanged(call);
+            } else if (hal != null) {
+                Log.w(TAG, "call " + call.id + " has no session, ending it");
+                try {
+                    hal.hangup(call.id);
+                } catch (RemoteException | RuntimeException e) {
+                    Log.w(TAG, "hangup of call " + call.id + " failed", e);
+                }
+            }
+        }
+    }
+    @Override
+    public void onDisconnected() {
+        // The HAL's calls died with it
+        for (int i = mSessions.size() - 1; i >= 0; i--) mSessions.valueAt(i).lost();
+        mSessions.clear();
+        updateCapabilities();
     }
 
     @Override

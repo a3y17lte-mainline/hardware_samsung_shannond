@@ -1,1 +1,1 @@
-package android.util; public class SparseArray<E> { public E get(int k) { return null; } public void put(int k, E v) {} public void remove(int k) {} }
+package android.util; public class SparseArray<E> { public E get(int k) { return null; } public void put(int k, E v) {} public void remove(int k) {} public int size() { return 0; } public E valueAt(int i) { return null; } public void clear() {} }
