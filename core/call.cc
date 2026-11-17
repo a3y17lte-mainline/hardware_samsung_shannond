@@ -160,6 +160,30 @@ void Calls::dial(const std::string &number, Done done, uint8_t identity)
     modem_.request(IPC_CALL_OUTGOING, IPC_TYPE_EXEC, data, [done](const Result &r) { done(r.ok); });
 }
 
+void Calls::dialEmergency(const std::string &number, uint8_t categories, Done done)
+{
+    // IpcTxCallOriginate with the emergency call type (0x0106) and the
+    // category in the last byte
+    ipc_call_outgoing_emergency_data data;
+    std::memset(&data, 0, sizeof(data));
+    if (ipc_call_outgoing_setup(&data.call, IPC_CALL_TYPE_VOICE, IPC_CALL_IDENTITY_DEFAULT,
+                                IPC_CALL_PREFIX_NONE, number.c_str()) < 0) {
+        done(false);
+        return;
+    }
+    data.call.unknown = IPC_CALL_OUTGOING_EMERGENCY;
+    data.category = categories & 0x7f;
+    modem_.request(IPC_CALL_OUTGOING, IPC_TYPE_EXEC, data, [done](const Result &r) { done(r.ok); });
+}
+
+void Calls::setMute(bool mute, Done done)
+{
+    // IpcTxSndSetMute: the framework's value as it is
+    ipc_snd_mic_mute_ctrl_data data{};
+    data.mute = mute ? 1 : 0;
+    modem_.request(IPC_SND_MIC_MUTE_CTRL, IPC_TYPE_SET, data, [done](const Result &r) { done(r.ok); });
+}
+
 void Calls::answer(Done done)
 {
     modem_.request(IPC_CALL_ANSWER, IPC_TYPE_EXEC, {}, [done](const Result &r) { done(r.ok); });

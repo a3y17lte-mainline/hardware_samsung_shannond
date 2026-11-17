@@ -20,6 +20,33 @@ bool sessionOver(uint8_t sw1, uint8_t sw2)
 
 constexpr uint8_t kMenuSelectionTag = 0xd3;
 
+// 102 223: proactive command tag, simple TLV tags (comprehension bit off)
+constexpr uint8_t kProactiveCommandTag = 0xd0;
+constexpr uint8_t kCommandDetailsTag = 0x01;
+constexpr uint8_t kFileListTag = 0x12;
+constexpr uint8_t kAidTag = 0x2f;
+constexpr uint8_t kRefreshCommand = 0x01;
+constexpr uint8_t kRefreshFileChange = 0x01;
+constexpr uint8_t kRefreshUiccReset = 0x04;
+
+// The simple TLVs of a BER-TLV object, by tag without the comprehension bit
+std::vector<std::pair<uint8_t, Bytes>> tlvs(const Bytes &data, size_t at, size_t end)
+{
+    std::vector<std::pair<uint8_t, Bytes>> out;
+    while (at + 2 <= end) {
+        const uint8_t tag = data[at] & 0x7f;
+        size_t len = data[at + 1];
+        at += 2;
+        if (len == 0x81 && at < end)
+            len = data[at++];
+        if (at + len > end)
+            break;
+        out.push_back({tag, Bytes(data.begin() + at, data.begin() + at + len)});
+        at += len;
+    }
+    return out;
+}
+
 }  // namespace
 
 Sat::Sat(Modem &modem) : modem_(modem)
@@ -28,6 +55,12 @@ Sat::Sat(Modem &modem) : modem_(modem)
         // Answers to terminal responses have this command too
         if (m.type == IPC_TYPE_INDI)
             proactive(m);
+    });
+    modem_.onMessage(IPC_SAT_REFRESH, [this](const Message &m) { refreshed(m); });
+    // The result of call control by the card: Android has no request for
+    // it any more (the stock RIL passes it to Samsung's framework)
+    modem_.onMessage(IPC_SAT_CALL_CONTROL_RESULT, [this](const Message &m) {
+        modem_.log("SIM call control result, %zu bytes", m.data.size());
     });
     modem_.onMessage(IPC_SAT_ENVELOPE_CMD, [this](const Message &m) {
         auto header = m.as<ipc_sat_envelope_response_header>();
@@ -52,6 +85,7 @@ void Sat::proactive(const Message &message)
     }
     Bytes command(message.data.begin() + sizeof(*header),
                   message.data.begin() + sizeof(*header) + header->length);
+    remember(command);
 
     if (running_ && command_)
         command_(command);
@@ -121,6 +155,66 @@ void Sat::envelopeAnswer(std::optional<EnvelopeResult> result)
     done(std::move(result));
     if (over && sessionEnd_)
         sessionEnd_();
+}
+
+void Sat::remember(const Bytes &command)
+{
+    // The stock RIL keeps what a REFRESH named until the modem reports
+    // that it has refreshed (IpcStkCache)
+    if (command.size() < 2 || command[0] != kProactiveCommandTag)
+        return;
+    size_t at = 1;
+    size_t len = command[at++];
+    if (len == 0x81 && at < command.size())
+        len = command[at++];
+    const auto items = tlvs(command, at, std::min(command.size(), at + len));
+    auto details = std::find_if(items.begin(), items.end(),
+                                [](const auto &t) { return t.first == kCommandDetailsTag; });
+    if (details == items.end() || details->second.size() < 3 || details->second[1] != kRefreshCommand)
+        return;
+
+    refreshQualifier_ = details->second[2];
+    refreshFiles_.clear();
+    refreshAid_.clear();
+    for (const auto &[tag, value] : items) {
+        if (tag == kAidTag) {
+            refreshAid_ = value;
+        } else if (tag == kFileListTag && !value.empty()) {
+            // Paths from the MF: each ends with the file that changed
+            std::vector<uint16_t> path;
+            for (size_t i = 1; i + 1 < value.size(); i += 2) {
+                const uint16_t fid = value[i] << 8 | value[i + 1];
+                if (fid == 0x3f00 && !path.empty()) {
+                    refreshFiles_.push_back(path.back());
+                    path.clear();
+                }
+                path.push_back(fid);
+            }
+            if (!path.empty())
+                refreshFiles_.push_back(path.back());
+        }
+    }
+}
+
+void Sat::refreshed(const Message &message)
+{
+    // IpcRxSatRefresh: a notification with one byte; 1 ends a refresh, 2
+    // a card reset
+    if (message.type != IPC_TYPE_NOTI || message.data.empty() || !refreshQualifier_)
+        return;
+    const uint8_t phase = message.data[0];
+    const bool reset = *refreshQualifier_ == kRefreshUiccReset;
+    if (!((phase == 1 && !reset) || (phase == 2 && reset)))
+        return;
+
+    SimRefresh r;
+    r.type = reset ? 2 : *refreshQualifier_ == kRefreshFileChange ? 0 : 1;
+    r.files = refreshFiles_;
+    r.aid = refreshAid_;
+    refreshQualifier_.reset();
+    modem_.log("SIM refresh, type %d, %zu files", r.type, r.files.size());
+    if (refresh_)
+        refresh_(r);
 }
 
 }  // namespace shannond

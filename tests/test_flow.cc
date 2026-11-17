@@ -124,6 +124,32 @@ TEST(sim_toolkit_envelope_returns_the_cards_answer)
     }
 }
 
+TEST(sim_refresh_is_reported_once_the_modem_has_done_it)
+{
+    Stack s;
+    std::vector<SimRefresh> got;
+    s.sat.onRefresh([&](const SimRefresh &r) { got.push_back(r); });
+    CHECK(s.booted());
+
+    // REFRESH, file change notification, for EF 6F07 and 6F46 under ADF
+    const Bytes command = {0xd0, 0x18, 0x81, 0x03, 0x01, 0x01, 0x01, 0x82, 0x02, 0x81, 0x82,
+                           0x92, 0x0d, 0x02, 0x3f, 0x00, 0x7f, 0xff, 0x6f, 0x07,
+                           0x3f, 0x00, 0x7f, 0xff, 0x6f, 0x46};
+    Bytes frame{static_cast<uint8_t>(command.size()), 0x00};
+    frame.insert(frame.end(), command.begin(), command.end());
+    s.fake.send(IPC_SAT_PROACTIVE_CMD, IPC_TYPE_INDI, frame);
+    // A reset notice does not end a file change; the end does
+    s.fake.send(IPC_SAT_REFRESH, IPC_TYPE_NOTI, {2});
+    s.fake.send(IPC_SAT_REFRESH, IPC_TYPE_NOTI, {1});
+    CHECK(s.loop.runUntil([&] { return !got.empty(); }));
+    s.loop.runUntil([] { return false; }, std::chrono::milliseconds(20));
+    CHECK(got.size() == 1 && got[0].type == 0 && got[0].files == (std::vector<uint16_t>{0x6f07, 0x6f46}));
+    // Nothing more without a new REFRESH
+    s.fake.send(IPC_SAT_REFRESH, IPC_TYPE_NOTI, {1});
+    s.loop.runUntil([] { return false; }, std::chrono::milliseconds(20));
+    CHECK(got.size() == 1);
+}
+
 TEST(a_running_modem_is_taken_over)
 {
     // No start-up messages: the modem was started by an earlier client
@@ -463,6 +489,30 @@ TEST(outgoing_call_connects_and_switches_audio)
     s.calls.hangup([&](bool ok) { hung = ok; });
     CHECK(s.loop.runUntil([&] { return hung && s.calls.list().empty(); }));
     CHECK(audio.size() == 2 && !audio[1]);
+}
+
+TEST(emergency_call_and_mute_as_the_stock_ril_sends_them)
+{
+    Stack s;
+    CHECK(s.booted());
+    std::optional<bool> dialled;
+    s.calls.dialEmergency("112", 0x05, [&](bool ok) { dialled = ok; });
+    CHECK(s.loop.runUntil([&] { return dialled.has_value(); }));
+    Message out;
+    for (auto &m : s.fake.received)
+        if (m.command == IPC_CALL_OUTGOING)
+            out = m;
+    auto e = out.as<ipc_call_outgoing_emergency_data>();
+    CHECK(e && out.data.size() == sizeof(*e));
+    CHECK(e->call.unknown == IPC_CALL_OUTGOING_EMERGENCY && e->call.type == IPC_CALL_TYPE_VOICE &&
+          e->call.number_length == 3 && e->category == 0x05);
+
+    std::optional<bool> muted;
+    s.calls.setMute(true, [&](bool ok) { muted = ok; });
+    CHECK(s.loop.runUntil([&] { return muted.has_value(); }));
+    for (auto &m : s.fake.received)
+        if (m.command == IPC_SND_MIC_MUTE_CTRL)
+            CHECK(m.type == IPC_TYPE_SET && m.data == Bytes{1});
 }
 
 TEST(incoming_call_rings_and_is_answered)

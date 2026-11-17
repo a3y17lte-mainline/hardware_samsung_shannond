@@ -113,6 +113,23 @@ RadioSim::RadioSim(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
             if (auto i = indication())
                 i->stkSessionEnd(kUnsolicited);
         });
+        // A REFRESH the modem carried out: one indication per changed file
+        core.sat.onRefresh([this](const SimRefresh &refresh) {
+            auto i = indication();
+            if (!i)
+                return;
+            sim::SimRefreshResult r;
+            r.type = refresh.type;
+            r.aid = toHex(refresh.aid);
+            if (refresh.files.empty()) {
+                r.efId = 0;
+                i->simRefresh(kUnsolicited, r);
+            }
+            for (uint16_t file : refresh.files) {
+                r.efId = file;
+                i->simRefresh(kUnsolicited, r);
+            }
+        });
         if (stkRunning_)
             core.sat.clientRunning();
     });

@@ -179,7 +179,6 @@ RadioVoice::RadioVoice(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
                                                voice::EmergencyCallRouting routing,
                                                bool hasKnownUserIntentEmergency, bool isTesting)
 {
-    (void)categories;
     (void)urns;
     (void)routing;
     (void)hasKnownUserIntentEmergency;
@@ -188,16 +187,15 @@ RadioVoice::RadioVoice(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
             r->emergencyDialResponse(ok(serial));
         return ::ndk::ScopedAStatus::ok();
     }
-    // A normal voice call: the modem recognises the emergency numbers itself.
-    // The stock RIL's emergency call type (IpcTxCallOriginate @7) is not
-    // decoded yet
-    stack_->post([this, serial, number = dialInfo.address](Core *core) {
+    // The stock RIL's emergency call: its own call type, and the categories
+    // (Android's EmergencyServiceCategory bits are those of 24.008)
+    stack_->post([this, serial, number = dialInfo.address, categories](Core *core) {
         if (!core) {
             if (auto r = response())
                 r->emergencyDialResponse(notAvailable(serial));
             return;
         }
-        core->calls.dial(number, [this, serial](bool success) {
+        core->calls.dialEmergency(number, static_cast<uint8_t>(categories), [this, serial](bool success) {
             if (auto r = response())
                 r->emergencyDialResponse(success ? ok(serial) : failed(serial));
         });
@@ -455,10 +453,20 @@ void RadioVoice::handle(int32_t serial, Op op, int32_t gsmIndex)
 
 ::ndk::ScopedAStatus RadioVoice::setMute(int32_t serial, bool enable)
 {
-    // Remembered only: the microphone path belongs to the audio HAL
+    // In the modem, as the stock RIL does it, whatever the audio HAL does
+    // with the microphone
     mute_ = enable;
-    if (auto r = response())
-        r->setMuteResponse(ok(serial));
+    stack_->post([this, serial, enable](Core *core) {
+        if (!core) {
+            if (auto r = response())
+                r->setMuteResponse(notAvailable(serial));
+            return;
+        }
+        core->calls.setMute(enable, [this, serial](bool success) {
+            if (auto r = response())
+                r->setMuteResponse(success ? ok(serial) : failed(serial));
+        });
+    });
     return ::ndk::ScopedAStatus::ok();
 }
 

@@ -44,6 +44,11 @@ public:
 
     // identity: IPC_CALL_IDENTITY (default, hide or show the number)
     void dial(const std::string &number, Done done, uint8_t identity = 0);
+    // An emergency call, as the stock RIL places it; categories are the
+    // 3GPP TS 24.008 emergency service category bits (0: none given)
+    void dialEmergency(const std::string &number, uint8_t categories, Done done);
+    // The microphone of a call, muted in the modem
+    void setMute(bool mute, Done done);
     void answer(Done done);
     // Ends the call, or rejects the ringing one (one call)
     void hangup(Done done);
