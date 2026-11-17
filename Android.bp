@@ -32,6 +32,8 @@ cc_library_static {
         "core/ports.cc",
         "core/sim.cc",
         "core/sms.cc",
+        "core/ss.cc",
+        "core/text.cc",
     ],
     export_include_dirs: ["."],
     static_libs: ["libsamsung-ipc-shannon"],

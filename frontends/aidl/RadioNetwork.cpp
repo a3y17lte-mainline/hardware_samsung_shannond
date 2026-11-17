@@ -240,6 +240,18 @@ network::SignalStrength signalStrength(const Network &net)
 RadioNetwork::RadioNetwork(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
 {
     stack_->onReady([this](Core &core) {
+        core.ss.onNotification([this](const SsNotification &n) {
+            if (!suppServiceNotifications_)
+                return;
+            network::SuppSvcNotification out;
+            out.isMT = n.mt;
+            out.code = n.code;
+            out.index = n.index;
+            out.type = n.toa;
+            out.number = n.number;
+            if (auto i = indication())
+                i->suppSvcNotify(kUnsolicited, out);
+        });
         core.network.onChanged([this, &core] {
             // Registration, operator and signal all arrive here; the framework
             // polls the state after networkStateChanged
@@ -492,9 +504,30 @@ RadioNetwork::RadioNetwork(std::shared_ptr<Stack> stack) : stack_(std::move(stac
 
 ::ndk::ScopedAStatus RadioNetwork::setSuppServiceNotifications(int32_t serial, bool enable)
 {
-    (void)enable;
+    // The modem always sends them; they are passed on when wanted
+    suppServiceNotifications_ = enable;
     if (auto r = response())
         r->setSuppServiceNotificationsResponse(ok(serial));
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioNetwork::setBarringPassword(int32_t serial, const std::string &facility,
+                                                      const std::string &oldPassword,
+                                                      const std::string &newPassword)
+{
+    // The stock RIL sends the passwords alone, for every facility
+    (void)facility;
+    stack_->post([this, serial, oldPassword, newPassword](Core *core) {
+        if (!core) {
+            if (auto r = response())
+                r->setBarringPasswordResponse(notAvailable(serial));
+            return;
+        }
+        core->ss.changeBarringPassword(oldPassword, newPassword, [this, serial](const SsStatus &st) {
+            if (auto r = response())
+                r->setBarringPasswordResponse(ssResult(serial, st.ok, st.code));
+        });
+    });
     return ::ndk::ScopedAStatus::ok();
 }
 

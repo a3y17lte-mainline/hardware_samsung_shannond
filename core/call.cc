@@ -145,11 +145,11 @@ void Calls::setAudioPath(uint8_t path)
         sendAudioPath();
 }
 
-void Calls::dial(const std::string &number, Done done)
+void Calls::dial(const std::string &number, Done done, uint8_t identity)
 {
     ipc_call_outgoing_data data;
     const bool intl = !number.empty() && number[0] == '+';
-    if (ipc_call_outgoing_setup(&data, IPC_CALL_TYPE_VOICE, IPC_CALL_IDENTITY_DEFAULT,
+    if (ipc_call_outgoing_setup(&data, IPC_CALL_TYPE_VOICE, identity,
                                 intl ? IPC_CALL_PREFIX_INTL : IPC_CALL_PREFIX_NONE,
                                 intl ? number.c_str() + 1 : number.c_str()) < 0) {
         done(false);

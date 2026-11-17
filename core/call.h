@@ -42,7 +42,8 @@ public:
     // the last one ends
     void onAudio(std::function<void(bool active)> callback) { audio_ = std::move(callback); }
 
-    void dial(const std::string &number, Done done);
+    // identity: IPC_CALL_IDENTITY (default, hide or show the number)
+    void dial(const std::string &number, Done done, uint8_t identity = 0);
     void answer(Done done);
     void hangup(Done done);
     void dtmf(char tone, bool start, Done done);

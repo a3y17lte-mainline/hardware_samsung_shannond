@@ -21,7 +21,8 @@ Core::Core(EventLoop &loop, int fmt, int rfs, const Config &config)
       data(modem, DataLinks::wwan(config.wwanDevice)),
       sms(modem),
       calls(modem),
-      sat(modem)
+      sat(modem),
+      ss(modem)
 {
 }
 

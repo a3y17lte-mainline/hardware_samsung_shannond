@@ -353,4 +353,21 @@ int32_t dataCallFailCause(uint8_t cause)
     }
 }
 
+int32_t ssRadioError(uint16_t code)
+{
+    // RadioError values: GENERIC_FAILURE 2, PASSWORD_INCORRECT 3,
+    // OP_NOT_ALLOWED_DURING_VOICE_CALL 8
+    switch (code) {
+    case 0x000c:
+    case 0x0010:
+    case 0x8125:
+    case 0x8126:
+        return 3;
+    case 0x8004:
+        return 8;
+    default:
+        return 2;
+    }
+}
+
 }  // namespace shannond::hal

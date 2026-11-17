@@ -75,6 +75,9 @@ class RadioSim : public NotSupportedSim {
     ::ndk::ScopedAStatus getFacilityLockForApp(int32_t serial, const std::string &facility,
                                                const std::string &password, int32_t serviceClass,
                                                const std::string &appId) override;
+    ::ndk::ScopedAStatus setFacilityLockForApp(int32_t serial, const std::string &facility,
+                                               bool lockState, const std::string &password,
+                                               int32_t serviceClass, const std::string &appId) override;
     ::ndk::ScopedAStatus getIccCardStatus(int32_t serial) override;
     ::ndk::ScopedAStatus getImsiForApp(int32_t serial, const std::string &aid) override;
     ::ndk::ScopedAStatus iccCloseLogicalChannelWithSessionInfo(
@@ -121,6 +124,9 @@ class RadioNetwork : public NotSupportedNetwork {
     ::ndk::ScopedAStatus getVoiceRegistrationState(int32_t serial) override;
     ::ndk::ScopedAStatus setAllowedNetworkTypesBitmap(int32_t serial,
                                                       int32_t networkTypeBitmap) override;
+    ::ndk::ScopedAStatus setBarringPassword(int32_t serial, const std::string &facility,
+                                            const std::string &oldPassword,
+                                            const std::string &newPassword) override;
     ::ndk::ScopedAStatus setIndicationFilter(int32_t serial, int32_t indicationFilter) override;
     ::ndk::ScopedAStatus setLinkCapacityReportingCriteria(
             int32_t serial, int32_t hysteresisMs, int32_t hysteresisDlKbps,
@@ -138,6 +144,7 @@ class RadioNetwork : public NotSupportedNetwork {
   private:
     std::shared_ptr<Stack> stack_;
     std::atomic<int32_t> indicationFilter_{-1};  // IndicationFilter::ALL
+    std::atomic<bool> suppServiceNotifications_{false};
 };
 
 class RadioData : public NotSupportedData {
@@ -199,11 +206,16 @@ class RadioVoice : public NotSupportedVoice {
     explicit RadioVoice(std::shared_ptr<Stack> stack);
 
     ::ndk::ScopedAStatus acceptCall(int32_t serial) override;
+    ::ndk::ScopedAStatus cancelPendingUssd(int32_t serial) override;
     ::ndk::ScopedAStatus dial(int32_t serial, const voice::Dial &dialInfo) override;
     ::ndk::ScopedAStatus emergencyDial(int32_t serial, const voice::Dial &dialInfo,
                                        int32_t categories, const std::vector<std::string> &urns,
                                        voice::EmergencyCallRouting routing,
                                        bool hasKnownUserIntentEmergency, bool isTesting) override;
+    ::ndk::ScopedAStatus getCallForwardStatus(int32_t serial,
+                                              const voice::CallForwardInfo &callInfo) override;
+    ::ndk::ScopedAStatus getCallWaiting(int32_t serial, int32_t serviceClass) override;
+    ::ndk::ScopedAStatus getClip(int32_t serial) override;
     ::ndk::ScopedAStatus getClir(int32_t serial) override;
     ::ndk::ScopedAStatus getCurrentCalls(int32_t serial) override;
     ::ndk::ScopedAStatus getLastCallFailCause(int32_t serial) override;
@@ -216,6 +228,9 @@ class RadioVoice : public NotSupportedVoice {
     ::ndk::ScopedAStatus isVoNrEnabled(int32_t serial) override;
     ::ndk::ScopedAStatus rejectCall(int32_t serial) override;
     ::ndk::ScopedAStatus sendDtmf(int32_t serial, const std::string &s) override;
+    ::ndk::ScopedAStatus sendUssd(int32_t serial, const std::string &ussd) override;
+    ::ndk::ScopedAStatus setCallForward(int32_t serial, const voice::CallForwardInfo &callInfo) override;
+    ::ndk::ScopedAStatus setCallWaiting(int32_t serial, bool enable, int32_t serviceClass) override;
     ::ndk::ScopedAStatus setClir(int32_t serial, int32_t status) override;
     ::ndk::ScopedAStatus setMute(int32_t serial, bool enable) override;
     ::ndk::ScopedAStatus setTtyMode(int32_t serial, voice::TtyMode mode) override;

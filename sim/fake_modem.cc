@@ -2,6 +2,7 @@
 #include "sim/fake_modem.h"
 
 #include "core/sim.h"
+#include "core/text.h"
 
 #include <cstring>
 #include <sys/epoll.h>
@@ -172,6 +173,14 @@ void FakeModem::setCallState(uint8_t status)
     s.id = calls_.empty() ? 1 : calls_[0].id;
     s.status = status;
     send(IPC_CALL_STATUS, IPC_TYPE_NOTI, toBytes(s));
+}
+
+void FakeModem::sendUssd(uint8_t state, const std::string &text)
+{
+    const Bytes packed = packGsm7(text).value_or(Bytes{});
+    Bytes data{state, 0x0f, static_cast<uint8_t>(packed.size())};
+    data.insert(data.end(), packed.begin(), packed.end());
+    send(IPC_SS_USSD, IPC_TYPE_NOTI, data);
 }
 
 void FakeModem::incomingSms(const Bytes &pdu, uint8_t type)
@@ -360,6 +369,76 @@ void FakeModem::handle(const Message &r)
         res.ack = sendResult;
         res.id = 7;
         send(IPC_SMS_SEND_MSG, IPC_TYPE_RESP, toBytes(res), r.mseq);
+        return;
+    }
+    case IPC_SS_USSD: {
+        // A menu, then the balance for the reply "1"
+        auto req = r.as<ipc_ss_ussd_request_data>();
+        ack(r);
+        if (!req || req->action != IPC_SS_USSD_SEND)
+            return;
+        if (req->type == IPC_SS_USSD_TYPE_REQUEST)
+            sendUssd(IPC_SS_USSD_ACTION_REQUIRE, "1 Credit 2 Data");
+        else
+            sendUssd(IPC_SS_USSD_NO_ACTION_REQUIRE, "Credit: 100 CZK");
+        return;
+    }
+    case IPC_SS_WAITING:
+        if (r.type != IPC_TYPE_GET) {
+            ack(r);
+            return;
+        }
+        respond(r, Bytes{1, IPC_SS_CLASS_VOICE, IPC_SS_STATUS_ACTIVE});
+        return;
+    case IPC_SS_CLI:
+        if (r.type != IPC_TYPE_GET || r.data.empty()) {
+            ack(r);
+            return;
+        }
+        // CLIP provisioned, CLIR temporarily allowed
+        respond(r, Bytes{r.data[0], static_cast<uint8_t>(r.data[0] == IPC_SS_CLI_TYPE_CLIP ? 1 : 6)});
+        return;
+    case IPC_SS_FORWARDING: {
+        if (r.type != IPC_TYPE_GET) {
+            ack(r);
+            return;
+        }
+        // Busy: voice and data to one number (two entries), fax elsewhere
+        Bytes data{r.data.empty() ? uint8_t{2} : r.data[0], 3};
+        auto entry = [&](uint8_t cls, const char *number) {
+            ipc_ss_forwarding_entry e{};
+            e.class_type = cls;
+            e.status = IPC_SS_STATUS_ACTIVE;
+            e.no_reply_time = 20;
+            e.number_length = std::strlen(number);
+            e.number_type = IPC_SS_FORWARDING_ENTRY_NUMBER_INTL;
+            std::memcpy(e.number, number, e.number_length);
+            Bytes b = toBytes(e);
+            data.insert(data.end(), b.begin(), b.end());
+        };
+        entry(IPC_SS_CLASS_VOICE, "420123456");
+        entry(IPC_SS_CLASS_DATA, "420123456");
+        entry(IPC_SS_CLASS_FAX, "420999");
+        respond(r, data);
+        return;
+    }
+    case IPC_SS_BARRING: {
+        if (r.type == IPC_TYPE_GET) {
+            respond(r, Bytes{0, 1, IPC_SS_CLASS_VOICE, IPC_SS_STATUS_ACTIVE});
+            return;
+        }
+        auto set = r.as<ipc_ss_barring_set_data>();
+        const bool right = set && std::string(set->password, 4) == barringPassword;
+        if (right) {
+            ack(r);
+            return;
+        }
+        ipc_gen_phone_res_data res{};
+        res.group = r.command >> 8;
+        res.index = r.command & 0xff;
+        res.type = r.type;
+        res.code = 0x8126;  // the network's "wrong password"
+        send(IPC_GEN_PHONE_RES, IPC_TYPE_RESP, toBytes(res), r.mseq);
         return;
     }
     case IPC_GPRS_PDP_CONTEXT: {

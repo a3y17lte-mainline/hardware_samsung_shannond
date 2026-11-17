@@ -101,6 +101,10 @@ RadioVoice::RadioVoice(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
     });
 
     stack_->onReady([this](Core &core) {
+        core.ss.onUssd([this](UssdMode mode, const std::string &text) {
+            if (auto i = indication())
+                i->onUssd(kUnsolicited, static_cast<voice::UssdModeType>(mode), text);
+        });
         core.calls.setAudioPath(callAudioPath());
         core.calls.setVolume(callVolume());
         auto ringing = std::make_shared<bool>(false);
@@ -152,17 +156,19 @@ RadioVoice::RadioVoice(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
 
 ::ndk::ScopedAStatus RadioVoice::dial(int32_t serial, const voice::Dial &dialInfo)
 {
-    // Only on the user's request: the framework dials from the dialer
-    stack_->post([this, serial, number = dialInfo.address](Core *core) {
+    // Only on the user's request: the framework dials from the dialer.
+    // CLIR as the framework asks, else the setting kept by setClir
+    stack_->post([this, serial, number = dialInfo.address, clir = dialInfo.clir](Core *core) {
         if (!core) {
             if (auto r = response())
                 r->dialResponse(notAvailable(serial));
             return;
         }
+        const int n = clir != voice::Dial::CLIR_DEFAULT ? clir : core->ss.clirSetting();
         core->calls.dial(number, [this, serial](bool success) {
             if (auto r = response())
                 r->dialResponse(success ? ok(serial) : failed(serial));
-        });
+        }, static_cast<uint8_t>(n));
     });
     return ::ndk::ScopedAStatus::ok();
 }
@@ -392,19 +398,170 @@ void RadioVoice::release(int32_t serial, const char *what)
 
 ::ndk::ScopedAStatus RadioVoice::getClir(int32_t serial)
 {
-    // n = 0: the network's default; m = 2: unknown (no supplementary
-    // service query yet)
-    if (auto r = response())
-        r->getClirResponse(ok(serial), 0, 2);
+    // n: the setting kept for outgoing calls; m: the network's
+    stack_->post([this, serial](Core *core) {
+        if (!core) {
+            if (auto r = response())
+                r->getClirResponse(notAvailable(serial), 0, 0);
+            return;
+        }
+        core->ss.queryClir([this, serial](const SsStatus &st, int n, int m) {
+            if (auto r = response())
+                r->getClirResponse(ssResult(serial, st.ok, st.code), n, m);
+        });
+    });
     return ::ndk::ScopedAStatus::ok();
 }
 
 ::ndk::ScopedAStatus RadioVoice::setClir(int32_t serial, int32_t status)
 {
-    if (auto r = response())
-        r->setClirResponse(status == voice::Dial::CLIR_DEFAULT
-                                   ? ok(serial)
-                                   : notSupported(serial));
+    stack_->post([this, serial, status](Core *core) {
+        if (!core || status < voice::Dial::CLIR_DEFAULT || status > voice::Dial::CLIR_SUPPRESSION) {
+            if (auto r = response())
+                r->setClirResponse(core ? responseInfo(serial, RadioError::INVALID_ARGUMENTS)
+                                        : notAvailable(serial));
+            return;
+        }
+        core->ss.setClir(status, [this, serial](const SsStatus &st) {
+            if (auto r = response())
+                r->setClirResponse(ssResult(serial, st.ok, st.code));
+        });
+    });
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioVoice::getClip(int32_t serial)
+{
+    stack_->post([this, serial](Core *core) {
+        if (!core) {
+            if (auto r = response())
+                r->getClipResponse(notAvailable(serial), voice::ClipStatus::UNKNOWN);
+            return;
+        }
+        core->ss.queryClip([this, serial](const SsStatus &st, int status) {
+            if (auto r = response())
+                r->getClipResponse(ssResult(serial, st.ok, st.code), static_cast<voice::ClipStatus>(status));
+        });
+    });
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioVoice::getCallWaiting(int32_t serial, int32_t serviceClass)
+{
+    stack_->post([this, serial, serviceClass](Core *core) {
+        if (!core) {
+            if (auto r = response())
+                r->getCallWaitingResponse(notAvailable(serial), false, 0);
+            return;
+        }
+        core->ss.queryCallWaiting(serviceClass, [this, serial](const SsStatus &st, bool on, int classes) {
+            if (auto r = response())
+                r->getCallWaitingResponse(ssResult(serial, st.ok, st.code), on, classes);
+        });
+    });
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioVoice::setCallWaiting(int32_t serial, bool enable, int32_t serviceClass)
+{
+    stack_->post([this, serial, enable, serviceClass](Core *core) {
+        if (!core) {
+            if (auto r = response())
+                r->setCallWaitingResponse(notAvailable(serial));
+            return;
+        }
+        core->ss.setCallWaiting(enable, serviceClass, [this, serial](const SsStatus &st) {
+            if (auto r = response())
+                r->setCallWaitingResponse(ssResult(serial, st.ok, st.code));
+        });
+    });
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioVoice::getCallForwardStatus(int32_t serial, const voice::CallForwardInfo &callInfo)
+{
+    stack_->post([this, serial, callInfo](Core *core) {
+        if (!core) {
+            if (auto r = response())
+                r->getCallForwardStatusResponse(notAvailable(serial), {});
+            return;
+        }
+        core->ss.queryCallForward(callInfo.reason, callInfo.serviceClass,
+                                  [this, serial](const SsStatus &st, const std::vector<CallForward> &rules) {
+            std::vector<voice::CallForwardInfo> infos;
+            for (const CallForward &f : rules) {
+                voice::CallForwardInfo i;
+                i.status = f.active ? voice::CallForwardInfo::STATUS_ENABLE
+                                    : voice::CallForwardInfo::STATUS_DISABLE;
+                i.reason = f.reason;
+                i.serviceClass = f.serviceClass;
+                i.toa = f.toa;
+                i.number = f.number;
+                i.timeSeconds = f.timeSeconds;
+                infos.push_back(i);
+            }
+            if (auto r = response())
+                r->getCallForwardStatusResponse(ssResult(serial, st.ok, st.code), infos);
+        });
+    });
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioVoice::setCallForward(int32_t serial, const voice::CallForwardInfo &callInfo)
+{
+    stack_->post([this, serial, callInfo](Core *core) {
+        if (!core) {
+            if (auto r = response())
+                r->setCallForwardResponse(notAvailable(serial));
+            return;
+        }
+        CallForward rule;
+        rule.reason = callInfo.reason;
+        rule.serviceClass = callInfo.serviceClass;
+        rule.toa = callInfo.toa;
+        rule.number = callInfo.number;
+        rule.timeSeconds = callInfo.timeSeconds;
+        // An international number without its plus: the type of number says so
+        if (callInfo.toa == 0x91 && !rule.number.empty() && rule.number[0] != '+')
+            rule.number = "+" + rule.number;
+        core->ss.setCallForward(callInfo.status, rule, [this, serial](const SsStatus &st) {
+            if (auto r = response())
+                r->setCallForwardResponse(ssResult(serial, st.ok, st.code));
+        });
+    });
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioVoice::sendUssd(int32_t serial, const std::string &ussd)
+{
+    // Only on the user's request: dialled codes and menu answers
+    stack_->post([this, serial, ussd](Core *core) {
+        if (!core) {
+            if (auto r = response())
+                r->sendUssdResponse(notAvailable(serial));
+            return;
+        }
+        core->ss.sendUssd(ussd, [this, serial](const SsStatus &st) {
+            if (auto r = response())
+                r->sendUssdResponse(ssResult(serial, st.ok, st.code));
+        });
+    });
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioVoice::cancelPendingUssd(int32_t serial)
+{
+    stack_->post([this, serial](Core *core) {
+        if (!core) {
+            if (auto r = response())
+                r->cancelPendingUssdResponse(notAvailable(serial));
+            return;
+        }
+        core->ss.cancelUssd([this, serial](const SsStatus &st) {
+            if (auto r = response())
+                r->cancelPendingUssdResponse(ssResult(serial, st.ok, st.code));
+        });
+    });
     return ::ndk::ScopedAStatus::ok();
 }
 

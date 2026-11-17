@@ -50,6 +50,8 @@ public:
     size_t rfsChunk = 0;
     // Whether the answer to a SIM toolkit envelope names its request
     bool envelopeAnswersWithSequence = true;
+    // The supplementary services' state on the fake network
+    std::string barringPassword = "1234";
     // The result of the next SMS sent (0: delivered to the SMSC)
     uint16_t sendResult = 0;
 
@@ -67,6 +69,7 @@ private:
     void sendRegistration(uint8_t domain, uint8_t aseq);
     Bytes callList() const;
     void setCallState(uint8_t status);
+    void sendUssd(uint8_t state, const std::string &text);
 
     EventLoop &loop_;
     int fmt_[2];

@@ -418,9 +418,8 @@ void RadioSim::transmit(int32_t serial, const sim::SimApdu &message, bool logica
                                                      int32_t serviceClass, const std::string &appId)
 {
     (void)password;
-    (void)serviceClass;
     (void)appId;
-    stack_->post([this, serial, facility](Core *core) {
+    stack_->post([this, serial, facility, serviceClass](Core *core) {
         auto r = response();
         if (!r)
             return;
@@ -428,10 +427,40 @@ void RadioSim::transmit(int32_t serial, const sim::SimApdu &message, bool logica
             r->getFacilityLockForAppResponse(notAvailable(serial), 0);
             return;
         }
+        // Call barring is a supplementary service: the answer is the
+        // classes that are barred
+        if (Ss::isBarringFacility(facility)) {
+            core->ss.queryBarring(facility, serviceClass, [this, serial](const SsStatus &st, int classes) {
+                if (auto r = response())
+                    r->getFacilityLockForAppResponse(ssResult(serial, st.ok, st.code), classes);
+            });
+            return;
+        }
         int32_t locked = 0;
         if (facility == "SC" && !core->sim.apps().empty())
             locked = core->sim.apps()[0].pin1State == 0 ? 0 : 1;
         r->getFacilityLockForAppResponse(ok(serial), locked);
+    });
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioSim::setFacilityLockForApp(int32_t serial, const std::string &facility,
+                                                     bool lockState, const std::string &password,
+                                                     int32_t serviceClass, const std::string &appId)
+{
+    // Call barring only; the SIM's own locks need the PIN, which is
+    // never sent from here
+    (void)appId;
+    stack_->post([this, serial, facility, lockState, password, serviceClass](Core *core) {
+        if (!core || !Ss::isBarringFacility(facility)) {
+            if (auto r = response())
+                r->setFacilityLockForAppResponse(core ? notSupported(serial) : notAvailable(serial), -1);
+            return;
+        }
+        core->ss.setBarring(facility, lockState, password, serviceClass, [this, serial](const SsStatus &st) {
+            if (auto r = response())
+                r->setFacilityLockForAppResponse(ssResult(serial, st.ok, st.code), -1);
+        });
     });
     return ::ndk::ScopedAStatus::ok();
 }

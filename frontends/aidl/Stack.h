@@ -22,6 +22,7 @@
 #include "core/nv.h"
 #include "core/sim.h"
 #include "core/sms.h"
+#include "core/ss.h"
 
 namespace shannond::hal {
 
@@ -45,6 +46,7 @@ struct Core {
     Sms sms;
     Calls calls;
     Sat sat;
+    Ss ss;
     uint8_t supportedModes = 0;  // what the modem accepted when probed
 };
 

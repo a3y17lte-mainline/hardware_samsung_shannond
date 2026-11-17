@@ -144,3 +144,10 @@ TEST(codec_aka)
     auto bad = akaAnswer(1, {});
     CHECK(bad.sw1 == 0x98 && bad.sw2 == 0x62 && bad.data.empty());
 }
+
+TEST(codec_ss_error)
+{
+    CHECK(ssRadioError(0x8126) == 3 && ssRadioError(0x000c) == 3);
+    CHECK(ssRadioError(0x8004) == 8);
+    CHECK(ssRadioError(0x8101) == 2 && ssRadioError(0) == 2);
+}

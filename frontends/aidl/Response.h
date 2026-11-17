@@ -35,4 +35,12 @@ inline RadioResponseInfo notAvailable(int32_t serial)
 }
 inline RadioResponseInfo failed(int32_t serial) { return responseInfo(serial, RadioError::GENERIC_FAILURE); }
 
+int32_t ssRadioError(uint16_t code);  // Codec.h
+
+// The answer to a supplementary service request
+inline RadioResponseInfo ssResult(int32_t serial, bool success, uint16_t code)
+{
+    return success ? ok(serial) : responseInfo(serial, static_cast<RadioError>(ssRadioError(code)));
+}
+
 }  // namespace shannond::hal
