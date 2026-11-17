@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "frontends/aidl/Services.h"
 
+#include <aidl/android/hardware/radio/network/IndicationFilter.h>
+
 #include <limits>
 
 #include <aidl/android/hardware/radio/RadioAccessFamily.h>
@@ -243,7 +245,8 @@ RadioNetwork::RadioNetwork(std::shared_ptr<Stack> stack) : stack_(std::move(stac
             // polls the state after networkStateChanged
             if (auto i = indication()) {
                 i->networkStateChanged(kUnsolicited);
-                i->currentSignalStrength(kUnsolicited, signalStrength(core.network));
+                if (indicationFilter_ & static_cast<int32_t>(network::IndicationFilter::SIGNAL_STRENGTH))
+                    i->currentSignalStrength(kUnsolicited, signalStrength(core.network));
             }
         });
     });
@@ -444,12 +447,19 @@ RadioNetwork::RadioNetwork(std::shared_ptr<Stack> stack) : stack_(std::move(stac
     return ::ndk::ScopedAStatus::ok();
 }
 
-// Accepted and ignored: the modem reports registration and signal anyway,
-// and the framework keeps working without the filtering
+// The framework drops signal strength reports while nobody looks at the
+// screen (DeviceStateMonitor): that is the stock RIL's screen state, which
+// the modem uses to send less. Registration changes still go up
 
 ::ndk::ScopedAStatus RadioNetwork::setIndicationFilter(int32_t serial, int32_t indicationFilter)
 {
-    (void)indicationFilter;
+    indicationFilter_ = indicationFilter;
+    const bool screenOn =
+            indicationFilter & static_cast<int32_t>(network::IndicationFilter::SIGNAL_STRENGTH);
+    stack_->post([screenOn](Core *core) {
+        if (core)
+            core->network.setScreenOn(screenOn);
+    });
     if (auto r = response())
         r->setIndicationFilterResponse(ok(serial));
     return ::ndk::ScopedAStatus::ok();

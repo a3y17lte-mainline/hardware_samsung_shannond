@@ -170,6 +170,26 @@ TEST(lte_signal_as_the_stock_ril_reads_it)
     CHECK(!s.network.lteSignal().strength);
 }
 
+TEST(screen_state_goes_to_the_modem_as_an_event)
+{
+    Stack s;
+    CHECK(s.booted());
+    s.network.setScreenOn(false);
+    s.network.setScreenOn(false);
+    s.network.setScreenOn(true);
+    CHECK(s.loop.runUntil([&] { return s.fake.count(IPC_MISC_SCREEN_STATE) == 2; }));
+    std::vector<Message> sent;
+    for (auto &m : s.fake.received)
+        if (m.command == IPC_MISC_SCREEN_STATE)
+            sent.push_back(m);
+    CHECK(sent[0].type == IPC_TYPE_EVENT && sent[0].data == Bytes{0});
+    CHECK(sent[1].data == Bytes{1});
+    // An event has no answer, and holds nothing up
+    std::optional<bool> radio;
+    s.network.setRadioPower(true, [&](bool ok) { radio = ok; });
+    CHECK(s.loop.runUntil([&] { return radio.has_value(); }));
+}
+
 TEST(limited_service_is_a_refused_registration)
 {
     // As the stock RIL reads it; the front end turns it into emergency-only

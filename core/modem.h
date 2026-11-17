@@ -55,6 +55,9 @@ public:
         request(command, type, toBytes(payload), std::move(callback), timeout);
     }
 
+    // An event: sent at once, and nothing comes back
+    void event(uint16_t command, Bytes data);
+
     // Notifications and unsolicited answers of a command
     void onMessage(uint16_t command, Listener listener);
     // Requests of the modem on the RFS channel, by RFS command index

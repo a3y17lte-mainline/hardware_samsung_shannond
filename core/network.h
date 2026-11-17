@@ -75,6 +75,8 @@ public:
     void probeModes(std::function<void(uint8_t modes)> done = {});
     void setModes(uint8_t modes, std::function<void(bool ok)> done = {});
     void refresh();
+    // Whether anyone looks at the screen: the modem sends less while not
+    void setScreenOn(bool on);
 
 private:
     void powerUp();
@@ -95,6 +97,7 @@ private:
     int rssi_ = -1;
     LteSignal lte_;
     uint8_t modes_ = 0;
+    std::optional<bool> screenOn_;
     std::vector<std::function<void()>> changed_;
     std::vector<std::function<void()>> readyCallbacks_;
 };

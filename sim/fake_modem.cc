@@ -231,6 +231,8 @@ void FakeModem::crash()
 
 void FakeModem::handle(const Message &r)
 {
+    if (r.type == IPC_TYPE_EVENT)
+        return;  // events have no answer
     switch (r.command) {
     case IPC_MISC_ME_SN: {
         ipc_misc_me_sn_response_data sn{};

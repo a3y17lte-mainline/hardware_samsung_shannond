@@ -118,6 +118,18 @@ void Modem::send(Queued request)
     pending_[mseq] = Pending{request.command, request.type, std::move(request.callback), timer};
 }
 
+void Modem::event(uint16_t command, Bytes data)
+{
+    Message message;
+    message.command = command;
+    message.type = IPC_TYPE_EVENT;
+    message.mseq = nextSeq();
+    message.data = std::move(data);
+    const Bytes frame = encodeFmt(message);
+    if (isClosed_ || write(fmtFd_, frame.data(), frame.size()) != static_cast<ssize_t>(frame.size()))
+        log("send %s failed", commandName(command));
+}
+
 void Modem::onMessage(uint16_t command, Listener listener)
 {
     listeners_.emplace(command, std::move(listener));

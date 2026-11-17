@@ -137,6 +137,7 @@ class RadioNetwork : public NotSupportedNetwork {
 
   private:
     std::shared_ptr<Stack> stack_;
+    std::atomic<int32_t> indicationFilter_{-1};  // IndicationFilter::ALL
 };
 
 class RadioData : public NotSupportedData {

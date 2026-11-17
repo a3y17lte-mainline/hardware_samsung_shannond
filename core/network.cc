@@ -308,4 +308,14 @@ void Network::probeNext(uint8_t bit, uint8_t accepted, std::function<void(uint8_
                    });
 }
 
+void Network::setScreenOn(bool on)
+{
+    // IpcTxSetScreenState, sent by the stock RIL on every change
+    if (screenOn_ == on)
+        return;
+    screenOn_ = on;
+    modem_.log("screen %s", on ? "on" : "off");
+    modem_.event(IPC_MISC_SCREEN_STATE, Bytes{static_cast<uint8_t>(on ? 1 : 0)});
+}
+
 }  // namespace shannond
