@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "core/call.h"
 
+#include <algorithm>
 #include <cstdlib>
+#include <cstring>
 
 extern "C" {
 #include <samsung-ipc.h>
@@ -166,6 +168,30 @@ void Calls::answer(Done done)
 void Calls::hangup(Done done)
 {
     modem_.request(IPC_CALL_RELEASE, IPC_TYPE_EXEC, {}, [done](const Result &r) { done(r.ok); });
+}
+
+void Calls::hangup(uint8_t id, Done done)
+{
+    // CallManager::DoHangup: the plain release for the only call
+    if (calls_.size() <= 1) {
+        hangup(std::move(done));
+        return;
+    }
+    manage(IPC_SS_MANAGE_CALL_RELEASE_ONE, std::move(done), id);
+}
+
+void Calls::manage(uint8_t operation, Done done, uint8_t id, const std::string &number)
+{
+    // IpcTxCallSetManageCall: the modem's call ids as they are (the stock
+    // RIL shifts them only for Intel modems)
+    ipc_ss_manage_call_data data;
+    std::memset(&data, 0, sizeof(data));
+    data.operation = operation;
+    data.id = id;
+    const size_t len = std::min<size_t>(number.size(), IPC_SS_MANAGE_CALL_NUMBER_MAX);
+    data.number_length = static_cast<uint8_t>(len);
+    std::memcpy(data.number, number.data(), len);
+    modem_.request(IPC_SS_MANAGE_CALL, IPC_TYPE_SET, data, [done](const Result &r) { done(r.ok); });
 }
 
 void Calls::dtmf(char tone, bool start, Done done)

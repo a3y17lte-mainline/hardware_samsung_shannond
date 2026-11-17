@@ -31,6 +31,8 @@ public:
     void boot();
     void incomingSms(const Bytes &pdu, uint8_t type = 0x01 /* point to point */);
     void incomingCall(const std::string &number);
+    // A second call while one is up: it waits
+    void waitingCall(const std::string &number);
     void remoteHangup();
     // Camped on a GSM cell without registering: no SIM, emergency calls only
     void limitedService();
@@ -83,7 +85,9 @@ private:
         uint8_t status;
         bool incoming;
         std::string number;
+        bool mpty = false;
     };
+    void manageCalls(const Message &request);
     std::vector<FakeCall> calls_;
 };
 

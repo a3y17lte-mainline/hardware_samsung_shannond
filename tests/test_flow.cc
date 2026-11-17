@@ -2,6 +2,8 @@
 //
 // The whole daemon core against the synthetic modem: boot, SIM, LTE
 // registration, data with P-CSCF, SMS both ways, calls both ways, a crash.
+#include <algorithm>
+
 #include "core/attach.h"
 #include "core/call.h"
 #include "core/data.h"
@@ -482,6 +484,56 @@ TEST(incoming_call_rings_and_is_answered)
 
     s.fake.remoteHangup();
     CHECK(s.loop.runUntil([&] { return s.calls.list().empty(); }));
+}
+
+TEST(two_calls_swap_join_split_and_end)
+{
+    Stack s;
+    CHECK(s.booted());
+    std::vector<bool> audio;
+    s.calls.onAudio([&](bool on) { audio.push_back(on); });
+
+    bool dialled = false;
+    s.calls.dial("800810820", [&](bool ok) { dialled = ok; });
+    CHECK(s.loop.runUntil([&] {
+        return dialled && !s.calls.list().empty() && s.calls.list()[0].state == CallState::Active;
+    }));
+
+    // A second call waits; the swap puts the first on hold
+    auto states = [&] {
+        std::vector<CallState> v;
+        for (const Call &c : s.calls.list())
+            v.push_back(c.state);
+        return v;
+    };
+    s.fake.waitingCall("123456789");
+    CHECK(s.loop.runUntil([&] { return states() == std::vector{CallState::Active, CallState::Waiting}; }));
+
+    auto run = [&](uint8_t op, uint8_t id, std::vector<CallState> expect) {
+        std::optional<bool> done;
+        s.calls.manage(op, [&](bool ok) { done = ok; }, id);
+        return s.loop.runUntil([&] { return done.has_value() && *done && states() == expect; });
+    };
+    CHECK(run(IPC_SS_MANAGE_CALL_SWAP, 0, {CallState::Holding, CallState::Active}));
+    CHECK(run(IPC_SS_MANAGE_CALL_CONFERENCE, 0, {CallState::Active, CallState::Active}));
+    CHECK(s.calls.list()[0].multiparty && s.calls.list()[1].multiparty);
+    CHECK(run(IPC_SS_MANAGE_CALL_SPLIT, 2, {CallState::Holding, CallState::Active}));
+    auto m = std::find_if(s.fake.received.rbegin(), s.fake.received.rend(),
+                          [](const Message &x) { return x.command == IPC_SS_MANAGE_CALL; });
+    CHECK(m != s.fake.received.rend() && m->data.size() == sizeof(ipc_ss_manage_call_data) &&
+          m->data[0] == IPC_SS_MANAGE_CALL_SPLIT && m->data[1] == 2);
+
+    // One call by id while two are up; the last one with the plain release
+    std::optional<bool> ended;
+    s.calls.hangup(1, [&](bool ok) { ended = ok; });
+    CHECK(s.loop.runUntil([&] { return ended.has_value() && states() == std::vector{CallState::Active}; }));
+    const size_t releases = s.fake.count(IPC_CALL_RELEASE);
+    ended.reset();
+    s.calls.hangup(2, [&](bool ok) { ended = ok; });
+    CHECK(s.loop.runUntil([&] { return ended.has_value() && s.calls.list().empty(); }));
+    CHECK(s.fake.count(IPC_CALL_RELEASE) == releases + 1);
+    // The audio path stayed up for as long as there was a call
+    CHECK(audio == (std::vector<bool>{true, false}));
 }
 
 TEST(sim_services_for_ims)

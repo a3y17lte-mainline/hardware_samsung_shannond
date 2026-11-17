@@ -45,7 +45,14 @@ public:
     // identity: IPC_CALL_IDENTITY (default, hide or show the number)
     void dial(const std::string &number, Done done, uint8_t identity = 0);
     void answer(Done done);
+    // Ends the call, or rejects the ringing one (one call)
     void hangup(Done done);
+    // Ends one call by the modem's id: with other calls around that is a
+    // call handling request, as the stock RIL does it
+    void hangup(uint8_t id, Done done);
+    // 3GPP TS 22.030 call handling (+CHLD): an IPC_SS_MANAGE_CALL
+    // operation, on a call (by the modem's id) where one is named
+    void manage(uint8_t operation, Done done, uint8_t id = 0, const std::string &number = {});
     void dtmf(char tone, bool start, Done done);
     void refresh();
 

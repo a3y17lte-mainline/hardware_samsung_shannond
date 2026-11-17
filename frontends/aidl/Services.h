@@ -207,11 +207,13 @@ class RadioVoice : public NotSupportedVoice {
 
     ::ndk::ScopedAStatus acceptCall(int32_t serial) override;
     ::ndk::ScopedAStatus cancelPendingUssd(int32_t serial) override;
+    ::ndk::ScopedAStatus conference(int32_t serial) override;
     ::ndk::ScopedAStatus dial(int32_t serial, const voice::Dial &dialInfo) override;
     ::ndk::ScopedAStatus emergencyDial(int32_t serial, const voice::Dial &dialInfo,
                                        int32_t categories, const std::vector<std::string> &urns,
                                        voice::EmergencyCallRouting routing,
                                        bool hasKnownUserIntentEmergency, bool isTesting) override;
+    ::ndk::ScopedAStatus explicitCallTransfer(int32_t serial) override;
     ::ndk::ScopedAStatus getCallForwardStatus(int32_t serial,
                                               const voice::CallForwardInfo &callInfo) override;
     ::ndk::ScopedAStatus getCallWaiting(int32_t serial, int32_t serviceClass) override;
@@ -229,6 +231,7 @@ class RadioVoice : public NotSupportedVoice {
     ::ndk::ScopedAStatus rejectCall(int32_t serial) override;
     ::ndk::ScopedAStatus sendDtmf(int32_t serial, const std::string &s) override;
     ::ndk::ScopedAStatus sendUssd(int32_t serial, const std::string &ussd) override;
+    ::ndk::ScopedAStatus separateConnection(int32_t serial, int32_t gsmIndex) override;
     ::ndk::ScopedAStatus setCallForward(int32_t serial, const voice::CallForwardInfo &callInfo) override;
     ::ndk::ScopedAStatus setCallWaiting(int32_t serial, bool enable, int32_t serviceClass) override;
     ::ndk::ScopedAStatus setClir(int32_t serial, int32_t status) override;
@@ -236,9 +239,20 @@ class RadioVoice : public NotSupportedVoice {
     ::ndk::ScopedAStatus setTtyMode(int32_t serial, voice::TtyMode mode) override;
     ::ndk::ScopedAStatus startDtmf(int32_t serial, const std::string &s) override;
     ::ndk::ScopedAStatus stopDtmf(int32_t serial) override;
+    ::ndk::ScopedAStatus switchWaitingOrHoldingAndActive(int32_t serial) override;
 
   private:
-    void release(int32_t serial, const char *what);
+    enum class Op {
+        Hangup,
+        Reject,
+        HangupWaitingOrBackground,
+        HangupForegroundResumeBackground,
+        Switch,
+        Conference,
+        Separate,
+        Transfer,
+    };
+    void handle(int32_t serial, Op op, int32_t gsmIndex = 0);
 
     std::shared_ptr<Stack> stack_;
     std::atomic<bool> mute_{false};

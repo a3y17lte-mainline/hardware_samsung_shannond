@@ -4,6 +4,7 @@
 #include "core/sim.h"
 #include "core/text.h"
 
+#include <algorithm>
 #include <cstring>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -157,6 +158,7 @@ Bytes FakeModem::callList() const
         e.id = c.id;
         e.term = c.incoming ? IPC_CALL_TERM_MT : IPC_CALL_TERM_MO;
         e.status = c.status;
+        e.mpty = c.mpty;
         e.number_length = c.number.size();
         e.unknown2 = 0x81;
         Bytes entry = toBytes(e);
@@ -202,6 +204,88 @@ void FakeModem::incomingCall(const std::string &number)
     in.type = IPC_CALL_TYPE_VOICE;
     in.id = 1;
     send(IPC_CALL_INCOMING, IPC_TYPE_NOTI, toBytes(in));
+}
+
+void FakeModem::waitingCall(const std::string &number)
+{
+    const uint8_t id = calls_.empty() ? 1 : calls_.back().id + 1;
+    calls_.push_back({id, IPC_CALL_LIST_ENTRY_STATUS_WAITING, true, number});
+    ipc_call_incoming_data in{};
+    in.type = IPC_CALL_TYPE_VOICE;
+    in.id = id;
+    send(IPC_CALL_INCOMING, IPC_TYPE_NOTI, toBytes(in));
+}
+
+void FakeModem::manageCalls(const Message &r)
+{
+    // 22.030 call handling on the fake calls
+    auto m = r.as<ipc_ss_manage_call_data>();
+    if (!m) {
+        ack(r, false);
+        return;
+    }
+    auto has = [&](uint8_t status) {
+        return std::any_of(calls_.begin(), calls_.end(), [&](const FakeCall &c) { return c.status == status; });
+    };
+    auto drop = [&](auto pred) { calls_.erase(std::remove_if(calls_.begin(), calls_.end(), pred), calls_.end()); };
+    auto set = [&](uint8_t from, uint8_t to) {
+        for (auto &c : calls_)
+            if (c.status == from)
+                c.status = to;
+    };
+    constexpr uint8_t kParked = 0xee;
+    switch (m->operation) {
+    case IPC_SS_MANAGE_CALL_RELEASE_HELD_OR_WAITING:
+        if (has(IPC_CALL_LIST_ENTRY_STATUS_WAITING))
+            drop([](const FakeCall &c) { return c.status == IPC_CALL_LIST_ENTRY_STATUS_WAITING; });
+        else
+            drop([](const FakeCall &c) { return c.status == IPC_CALL_LIST_ENTRY_STATUS_HOLDING; });
+        break;
+    case IPC_SS_MANAGE_CALL_RELEASE_ACTIVE_ACCEPT:
+        drop([](const FakeCall &c) { return c.status == IPC_CALL_LIST_ENTRY_STATUS_ACTIVE; });
+        if (has(IPC_CALL_LIST_ENTRY_STATUS_WAITING))
+            set(IPC_CALL_LIST_ENTRY_STATUS_WAITING, IPC_CALL_LIST_ENTRY_STATUS_ACTIVE);
+        else
+            set(IPC_CALL_LIST_ENTRY_STATUS_HOLDING, IPC_CALL_LIST_ENTRY_STATUS_ACTIVE);
+        break;
+    case IPC_SS_MANAGE_CALL_RELEASE_ONE:
+        drop([&](const FakeCall &c) { return c.id == m->id; });
+        break;
+    case IPC_SS_MANAGE_CALL_SWAP:
+        set(IPC_CALL_LIST_ENTRY_STATUS_ACTIVE, kParked);
+        if (has(IPC_CALL_LIST_ENTRY_STATUS_WAITING))
+            set(IPC_CALL_LIST_ENTRY_STATUS_WAITING, IPC_CALL_LIST_ENTRY_STATUS_ACTIVE);
+        else
+            set(IPC_CALL_LIST_ENTRY_STATUS_HOLDING, IPC_CALL_LIST_ENTRY_STATUS_ACTIVE);
+        set(kParked, IPC_CALL_LIST_ENTRY_STATUS_HOLDING);
+        break;
+    case IPC_SS_MANAGE_CALL_CONFERENCE:
+        for (auto &c : calls_) {
+            if (c.status == IPC_CALL_LIST_ENTRY_STATUS_ACTIVE || c.status == IPC_CALL_LIST_ENTRY_STATUS_HOLDING) {
+                c.status = IPC_CALL_LIST_ENTRY_STATUS_ACTIVE;
+                c.mpty = true;
+            }
+        }
+        break;
+    case IPC_SS_MANAGE_CALL_SPLIT:
+        for (auto &c : calls_) {
+            c.status = c.id == m->id ? IPC_CALL_LIST_ENTRY_STATUS_ACTIVE : IPC_CALL_LIST_ENTRY_STATUS_HOLDING;
+            c.mpty = c.id != m->id && calls_.size() > 2;
+        }
+        break;
+    case IPC_SS_MANAGE_CALL_TRANSFER:
+        calls_.clear();
+        break;
+    default:
+        ack(r, false);
+        return;
+    }
+    ack(r);
+    ipc_call_status_data st{};
+    st.type = IPC_CALL_TYPE_VOICE;
+    st.id = m->id;
+    st.status = calls_.empty() ? IPC_CALL_STATUS_RELEASED : IPC_CALL_STATUS_CONNECTED;
+    send(IPC_CALL_STATUS, IPC_TYPE_NOTI, toBytes(st));
 }
 
 void FakeModem::remoteHangup()
@@ -507,6 +591,9 @@ void FakeModem::handle(const Message &r)
         return;
     case IPC_CALL_LIST:
         respond(r, callList());
+        return;
+    case IPC_SS_MANAGE_CALL:
+        manageCalls(r);
         return;
     default:
         // Settings are accepted; questions without a model get an error

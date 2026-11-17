@@ -221,61 +221,127 @@ RadioVoice::RadioVoice(std::shared_ptr<Stack> stack) : stack_(std::move(stack))
     return ::ndk::ScopedAStatus::ok();
 }
 
-// The core has one release (IPC_CALL_RELEASE): it ends the current call or
-// rejects the ringing one. Holding and multiparty calls are not built.
-void RadioVoice::release(int32_t serial, const char *what)
+// Call handling as the stock RIL's CallManager does it: the plain release
+// (IPC_CALL_RELEASE) for a lone call, a 22.030 operation otherwise. The
+// framework counts calls from 1, the modem from 0
+void RadioVoice::handle(int32_t serial, Op op, int32_t gsmIndex)
 {
-    const std::string kind = what;
-    stack_->post([this, serial, kind](Core *core) {
-        auto respond = [this, serial, kind](RadioResponseInfo info) {
+    stack_->post([this, serial, op, gsmIndex](Core *core) {
+        auto respond = [this, op](RadioResponseInfo info) {
             auto r = response();
             if (!r)
                 return;
-            if (kind == "hangup")
-                r->hangupConnectionResponse(info);
-            else if (kind == "reject")
-                r->rejectCallResponse(info);
-            else if (kind == "background")
-                r->hangupWaitingOrBackgroundResponse(info);
-            else
-                r->hangupForegroundResumeBackgroundResponse(info);
+            switch (op) {
+            case Op::Hangup: r->hangupConnectionResponse(info); break;
+            case Op::Reject: r->rejectCallResponse(info); break;
+            case Op::HangupWaitingOrBackground: r->hangupWaitingOrBackgroundResponse(info); break;
+            case Op::HangupForegroundResumeBackground: r->hangupForegroundResumeBackgroundResponse(info); break;
+            case Op::Switch: r->switchWaitingOrHoldingAndActiveResponse(info); break;
+            case Op::Conference: r->conferenceResponse(info); break;
+            case Op::Separate: r->separateConnectionResponse(info); break;
+            case Op::Transfer: r->explicitCallTransferResponse(info); break;
+            }
         };
         if (!core) {
             respond(notAvailable(serial));
             return;
         }
-        if (core->calls.list().empty()) {
+        const auto &calls = core->calls.list();
+        if (calls.empty()) {
             respond(responseInfo(serial, RadioError::INVALID_STATE));
             return;
         }
-        core->calls.hangup([serial, respond](bool success) {
-            respond(success ? ok(serial) : failed(serial));
-        });
+        auto done = [respond, serial](bool success) { respond(success ? ok(serial) : failed(serial)); };
+        const bool lone = calls.size() == 1;
+
+        switch (op) {
+        case Op::Hangup:
+            if (gsmIndex < 1) {
+                respond(responseInfo(serial, RadioError::INVALID_ARGUMENTS));
+                return;
+            }
+            core->calls.hangup(static_cast<uint8_t>(gsmIndex - 1), done);
+            return;
+        case Op::Reject:  // DoUdub
+            core->calls.manage(IPC_SS_MANAGE_CALL_RELEASE_HELD_OR_WAITING, done);
+            return;
+        case Op::HangupWaitingOrBackground:
+            if (lone && calls[0].state != CallState::Incoming)
+                core->calls.hangup(done);
+            else
+                core->calls.manage(IPC_SS_MANAGE_CALL_RELEASE_HELD_OR_WAITING, done);
+            return;
+        case Op::HangupForegroundResumeBackground:
+            if (lone)
+                core->calls.hangup(done);
+            else
+                core->calls.manage(IPC_SS_MANAGE_CALL_RELEASE_ACTIVE_ACCEPT, done);
+            return;
+        case Op::Switch:
+            core->calls.manage(IPC_SS_MANAGE_CALL_SWAP, done);
+            return;
+        case Op::Conference:
+            core->calls.manage(IPC_SS_MANAGE_CALL_CONFERENCE, done);
+            return;
+        case Op::Separate:
+            if (gsmIndex < 1) {
+                respond(responseInfo(serial, RadioError::INVALID_ARGUMENTS));
+                return;
+            }
+            core->calls.manage(IPC_SS_MANAGE_CALL_SPLIT, done, static_cast<uint8_t>(gsmIndex - 1));
+            return;
+        case Op::Transfer:
+            core->calls.manage(IPC_SS_MANAGE_CALL_TRANSFER, done);
+            return;
+        }
     });
 }
 
 ::ndk::ScopedAStatus RadioVoice::hangup(int32_t serial, int32_t gsmIndex)
 {
-    (void)gsmIndex;  // one call at a time
-    release(serial, "hangup");
+    handle(serial, Op::Hangup, gsmIndex);
     return ::ndk::ScopedAStatus::ok();
 }
 
 ::ndk::ScopedAStatus RadioVoice::rejectCall(int32_t serial)
 {
-    release(serial, "reject");
+    handle(serial, Op::Reject);
     return ::ndk::ScopedAStatus::ok();
 }
 
 ::ndk::ScopedAStatus RadioVoice::hangupWaitingOrBackground(int32_t serial)
 {
-    release(serial, "background");
+    handle(serial, Op::HangupWaitingOrBackground);
     return ::ndk::ScopedAStatus::ok();
 }
 
 ::ndk::ScopedAStatus RadioVoice::hangupForegroundResumeBackground(int32_t serial)
 {
-    release(serial, "foreground");
+    handle(serial, Op::HangupForegroundResumeBackground);
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioVoice::switchWaitingOrHoldingAndActive(int32_t serial)
+{
+    handle(serial, Op::Switch);
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioVoice::conference(int32_t serial)
+{
+    handle(serial, Op::Conference);
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioVoice::separateConnection(int32_t serial, int32_t gsmIndex)
+{
+    handle(serial, Op::Separate, gsmIndex);
+    return ::ndk::ScopedAStatus::ok();
+}
+
+::ndk::ScopedAStatus RadioVoice::explicitCallTransfer(int32_t serial)
+{
+    handle(serial, Op::Transfer);
     return ::ndk::ScopedAStatus::ok();
 }
 
