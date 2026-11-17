@@ -222,9 +222,10 @@ void Network::refresh()
 
 void Network::regist(const Message &message)
 {
-    auto r = message.as<ipc_net_regist_response_data>();
-    if (!r)
+    ipc_net_regist_response_ext_data ext{};
+    if (ipc_net_regist_response_ext_extract(message.data.data(), message.data.size(), &ext) < 0)
         return;
+    const auto *r = &ext;
 
     Registration reg;
     reg.state = stateFromRaw(r->status);
@@ -233,6 +234,17 @@ void Network::regist(const Message &message)
     reg.area = r->lac;
     reg.cell = r->cid;
     reg.rejectCause = r->fail_cause;
+    reg.tac = r->tac;
+    reg.pci = r->pci;
+    auto support = [](uint8_t v) -> std::optional<bool> {
+        if (v == IPC_NET_LTE_SUPPORTED)
+            return true;
+        if (v == IPC_NET_LTE_NOT_SUPPORTED)
+            return false;
+        return std::nullopt;
+    };
+    reg.volte = support(r->volte);
+    reg.imsEmergency = support(r->ims_emergency);
 
     // One record per domain; on LTE the modem also sends a combined one
     if (r->domain != IPC_NET_SERVICE_DOMAIN_GPRS)
@@ -240,8 +252,9 @@ void Network::regist(const Message &message)
     if (r->domain != IPC_NET_SERVICE_DOMAIN_GSM)
         data_ = reg;
 
-    modem_.log("registration domain %u: %s on %s (raw %#x), cause %u", r->domain,
-               regStateName(reg.state), accessTechName(reg.tech), reg.rawTech, reg.rejectCause);
+    modem_.log("registration domain %u: %s on %s (raw %#x), cause %u, VoLTE %s", r->domain,
+               regStateName(reg.state), accessTechName(reg.tech), reg.rawTech, reg.rejectCause,
+               reg.volte ? (*reg.volte ? "yes" : "no") : "?");
     notify();
 }
 

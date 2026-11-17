@@ -46,6 +46,7 @@ struct DataCall {
     unsigned int mtu = 0;
     bool active = false;
     uint8_t failCause = 0;
+    bool ims = false;  // the IMS PDN
 };
 
 // How a context's interface is provided: by default a WWAN link

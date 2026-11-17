@@ -126,6 +126,7 @@ void Data::connect(unsigned int cid, const DataProfile &profile, Done done)
     pending_[cid] = std::move(done);
     calls_[cid] = DataCall{};
     calls_[cid].cid = cid;
+    calls_[cid].ims = profile.ims;
     activate(cid, profile, 0);
 
     modem_.loop().after(kConnectTimeout, [this, cid] {
@@ -138,10 +139,32 @@ void Data::connect(unsigned int cid, const DataProfile &profile, Done done)
 
 void Data::activate(unsigned int cid, const DataProfile &profile, int attempt)
 {
-    ipc_gprs_define_pdp_context_data define;
-    ipc_gprs_define_pdp_context_setup(&define, 1, cid, profile.apn.c_str());
+    // The IMS PDN as the stock RIL defines it: its IP type and a request for
+    // P-CSCF addresses. Other contexts as before (IPv4), which is what the
+    // phone was tested with
+    Bytes define;
+    if (profile.ims) {
+        ipc_gprs_define_pdp_context_ext_data ext;
+        uint8_t type = IPC_GPRS_PDP_TYPE_IPV4V6, pcscf = IPC_GPRS_PCSCF_REQUEST_IPV4V6;
+        if (profile.protocol == IpProtocol::Ipv4) {
+            type = IPC_GPRS_PDP_TYPE_IPV4;
+            pcscf = IPC_GPRS_PCSCF_REQUEST_IPV4;
+        } else if (profile.protocol == IpProtocol::Ipv6) {
+            type = IPC_GPRS_PDP_TYPE_IPV6;
+            pcscf = IPC_GPRS_PCSCF_REQUEST_IPV6;
+        }
+        if (ipc_gprs_define_pdp_context_ext_setup(&ext, cid, type, profile.apn.c_str(), pcscf) < 0) {
+            complete(cid, false);
+            return;
+        }
+        define = toBytes(ext);
+    } else {
+        ipc_gprs_define_pdp_context_data plain;
+        ipc_gprs_define_pdp_context_setup(&plain, 1, cid, profile.apn.c_str());
+        define = toBytes(plain);
+    }
 
-    modem_.request(IPC_GPRS_DEFINE_PDP_CONTEXT, IPC_TYPE_SET, define,
+    modem_.request(IPC_GPRS_DEFINE_PDP_CONTEXT, IPC_TYPE_SET, std::move(define),
                    [this, cid, profile, attempt](const Result &r) {
         if (!pending_.count(cid))
             return;

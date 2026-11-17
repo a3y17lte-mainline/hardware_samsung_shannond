@@ -26,6 +26,13 @@ struct Registration {
     uint16_t area = 0;      // LAC or TAC
     uint32_t cell = 0;
     uint8_t rejectCause = 0;
+    // On LTE: the tracking area, physical cell, and whether the network
+    // supports voice over PS (VoLTE) and IMS emergency calls; empty while
+    // the modem did not say
+    uint16_t tac = 0;
+    uint16_t pci = 0;
+    std::optional<bool> volte;
+    std::optional<bool> imsEmergency;
 };
 
 // Mode bits of IPC_NET_MODE_SEL on Shannon
