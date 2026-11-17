@@ -207,10 +207,16 @@ network::SignalStrength signalStrength(const Network &net)
 
     const Registration &reg = registered(net.data().state) ? net.data() : net.voice();
     switch (reg.tech) {
-    case AccessTech::Lte:
+    case AccessTech::Lte: {
         // Without RSRP the framework falls back to the RSSI for the level
-        s.lte.signalStrength = asu;
+        const LteSignal &lte = net.lteSignal();
+        s.lte.signalStrength = lte.strength.value_or(asu);
+        s.lte.rsrp = lte.rsrp.value_or(kUnavailable);
+        s.lte.rsrq = lte.rsrq.value_or(kUnavailable);
+        s.lte.rssnr = lte.snr.value_or(kUnavailable);
+        s.lte.cqi = lte.cqi.value_or(kUnavailable);
         break;
+    }
     case AccessTech::Umts:
         s.wcdma.signalStrength = asu;
         s.wcdma.bitErrorRate = 99;

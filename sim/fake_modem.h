@@ -51,11 +51,13 @@ public:
 
     size_t count(uint16_t command) const;
 
+    // Any message, for frames recorded from the phone
+    void send(uint16_t command, uint8_t type, const Bytes &data, uint8_t aseq = 0);
+
 private:
     void readFmt();
     void readRfs();
     void handle(const Message &request);
-    void send(uint16_t command, uint8_t type, const Bytes &data, uint8_t aseq = 0);
     void ack(const Message &request, bool ok = true);
     void respond(const Message &request, const Bytes &data);
     void sendRegistration(uint8_t domain, uint8_t aseq);

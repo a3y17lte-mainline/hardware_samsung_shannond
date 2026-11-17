@@ -130,6 +130,18 @@ Network::Network(Modem &modem) : modem_(modem)
     modem_.onMessage(IPC_DISP_RSSI_INFO, [this](const Message &m) {
         if (auto r = m.as<ipc_disp_rssi_info_data>()) {
             rssi_ = r->rssi;
+            lte_ = {};
+            // The long form, read as the stock RIL does
+            if (auto l = m.as<ipc_disp_rssi_info_lte_data>()) {
+                lte_.strength = l->lte_signal;
+                if (l->lte_rsrp)
+                    lte_.rsrp = l->lte_rsrp;
+                lte_.rsrq = l->lte_rsrq;
+                if (l->lte_snr <= 500)
+                    lte_.snr = static_cast<int>(l->lte_snr) - 200;
+                if (l->lte_cqi != 0xff)
+                    lte_.cqi = l->lte_cqi;
+            }
             notify();
         }
     });

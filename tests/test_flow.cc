@@ -61,6 +61,28 @@ TEST(boot_brings_sim_registration_and_identities)
     CHECK(s.fake.count(IPC_SEC_PIN_STATUS) == 0);
 }
 
+TEST(lte_signal_as_the_stock_ril_reads_it)
+{
+    Stack s;
+    CHECK(s.booted());
+
+    // A frame from the phone: -100 dBm, RSRP -100 dBm, RSRQ -13 dB, SNR 4.0 dB
+    s.fake.send(IPC_DISP_RSSI_INFO, IPC_TYPE_NOTI,
+                {0x64, 0x63, 0x63, 0x0b, 0x64, 0x0d, 0xf0, 0x00, 0x00, 0xff, 0x04, 0xff});
+    CHECK(s.loop.runUntil([&] { return s.network.signal() == 100; }));
+    const LteSignal &lte = s.network.lteSignal();
+    CHECK(lte.strength == 11 && lte.rsrp == 100 && lte.rsrq == 13 && lte.snr == 40 && lte.cqi == 0);
+
+    // Unknown values stay unknown; the short form has no LTE part
+    s.fake.send(IPC_DISP_RSSI_INFO, IPC_TYPE_NOTI,
+                {0x5a, 0x63, 0x63, 0x0b, 0x00, 0x0d, 0xff, 0xff, 0xff});
+    CHECK(s.loop.runUntil([&] { return s.network.signal() == 90; }));
+    CHECK(!s.network.lteSignal().rsrp && !s.network.lteSignal().snr && !s.network.lteSignal().cqi);
+    s.fake.send(IPC_DISP_RSSI_INFO, IPC_TYPE_NOTI, {0x50});
+    CHECK(s.loop.runUntil([&] { return s.network.signal() == 80; }));
+    CHECK(!s.network.lteSignal().strength);
+}
+
 TEST(limited_service_is_a_refused_registration)
 {
     // As the stock RIL reads it; the front end turns it into emergency-only

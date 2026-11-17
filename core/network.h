@@ -4,6 +4,7 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,15 @@ constexpr uint8_t kModeGsm = 0x01;
 constexpr uint8_t kModeUmts = 0x02;
 constexpr uint8_t kModeLte = 0x08;
 
+// LTE signal as the modem reports it; a field is empty while unknown
+struct LteSignal {
+    std::optional<int> strength;  // 0 to 31
+    std::optional<int> rsrp;      // -dBm
+    std::optional<int> rsrq;      // -dB
+    std::optional<int> snr;       // 0.1 dB
+    std::optional<int> cqi;
+};
+
 class Network {
 public:
     explicit Network(Modem &modem);
@@ -45,6 +55,8 @@ public:
     const std::string &operatorLongName() const { return longName_; }
     const std::string &operatorShortName() const { return shortName_; }
     int signal() const { return rssi_; }  // raw IPC_DISP_RSSI_INFO: -dBm, -1 if unknown
+    // The LTE measurements that come with it, in Android's units
+    const LteSignal &lteSignal() const { return lte_; }
     const std::string &version() const { return version_; }  // modem software
     bool radioOn() const { return radioOn_; }
     uint8_t modes() const { return modes_; }
@@ -75,6 +87,7 @@ private:
     std::string longName_;
     std::string shortName_;
     int rssi_ = -1;
+    LteSignal lte_;
     uint8_t modes_ = 0;
     std::vector<std::function<void()>> changed_;
     std::vector<std::function<void()>> readyCallbacks_;
